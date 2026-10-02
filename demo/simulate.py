@@ -29,6 +29,7 @@ wait()
 event=create_event()
 print(f"EVENT_ID={event}")
 origin=(48.8566,2.3522)
+print("Keep SARCADE App open: positions are broadcast live over WebSocket.")
 for step in range(20):
     for n in range(4):
         angle=(step+n*5)/12
