@@ -23,6 +23,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: on-failure
 
   simulator:
     image: python:3.12-slim
