@@ -6,7 +6,7 @@ from geoalchemy2.elements import WKTElement
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from sarcade.db.models import EventRow, POIRow, PositionRow, SyncOperationRow, TeamRow
+from sarcade.db.models import AckRow, EventRow, LogbookRow, MessageRow, POIRow, PositionRow, SyncOperationRow, TeamRow
 from sarcade.db.session import SessionLocal
 from sarcade.realtime.manager import manager
 from .schemas import EventCreate, EventOut, POICreate, POIOut, PositionCreate, PositionOut, SyncOperationIn, SyncResultOut, TeamCreate, TeamOut
@@ -142,6 +142,25 @@ async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(g
                 )
                 db.add(row); db.flush()
                 broadcasts.append((op.event_id, {"type":"poi.created","data":p}))
+            elif op.object_type == "message" and db.get(MessageRow, op.object_id) is None:
+                row = MessageRow(id=op.object_id,event_id=op.event_id,sender_id=p["sender_id"],
+                    recipient_ids=p.get("recipient_ids",[]),priority=p.get("priority","routine"),
+                    body=p["body"],created_at=datetime.fromisoformat(p["created_at"].replace("Z","+00:00")))
+                db.add(row); db.flush()
+                db.add(LogbookRow(event_id=op.event_id,kind="message",object_id=row.id,
+                    actor_id=row.sender_id,summary=row.body,time=row.created_at))
+                broadcasts.append((op.event_id, {"type":"message.created","data":p}))
+            elif op.object_type == "ack" and db.get(AckRow, op.object_id) is None:
+                if db.get(MessageRow, p["message_id"]) is None:
+                    status = "rejected"
+                else:
+                    row = AckRow(id=op.object_id,event_id=op.event_id,message_id=p["message_id"],
+                        actor_id=p["actor_id"],status=p["status"],
+                        time=datetime.fromisoformat(p["time"].replace("Z","+00:00")))
+                    db.add(row); db.flush()
+                    db.add(LogbookRow(event_id=op.event_id,kind="ack",object_id=row.id,
+                        actor_id=row.actor_id,summary=f'{row.status}: {row.message_id}',time=row.time))
+                    broadcasts.append((op.event_id, {"type":"ack.created","data":p}))
         results.append({
             "operation_id": op.operation_id,"status": status,
             "server_time": datetime.now(UTC),"sync_cursor": str(cursor) if cursor else None,
@@ -163,3 +182,15 @@ def sync_changes(event_id: str, after: int = Query(0, ge=0), limit: int = Query(
                      "server_time": r.server_time} for r in rows],
         "next_cursor": str(rows[-1].seq) if rows else str(after),
     }
+
+
+@app.get("/api/v0.1/events/{event_id}/messages")
+def list_messages(event_id: str, limit: int = Query(200, ge=1, le=2000), db: Session = Depends(get_db)):
+    rows = db.scalars(select(MessageRow).where(MessageRow.event_id == event_id).order_by(MessageRow.created_at.desc()).limit(limit)).all()
+    return [{"id":r.id,"event_id":r.event_id,"sender_id":r.sender_id,"recipient_ids":r.recipient_ids,
+             "priority":r.priority,"body":r.body,"created_at":r.created_at} for r in reversed(rows)]
+
+@app.get("/api/v0.1/events/{event_id}/logbook")
+def list_logbook(event_id: str, after: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=2000), db: Session = Depends(get_db)):
+    rows = db.scalars(select(LogbookRow).where(LogbookRow.event_id == event_id,LogbookRow.seq > after).order_by(LogbookRow.seq).limit(limit)).all()
+    return [{"seq":r.seq,"kind":r.kind,"object_id":r.object_id,"actor_id":r.actor_id,"summary":r.summary,"time":r.time} for r in rows]
