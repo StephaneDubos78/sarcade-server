@@ -22,7 +22,7 @@ Le simulateur crée un événement et envoie 20 positions pour chacun des quatre
 
 ## Test automatique
 ```powershell
-docker compose -f docker-compose.demo.yml run --rm simulator python verify.py
+docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify.py"
 ```
 Résultat attendu : PASS avec une opération acceptée, sa retransmission détectée comme duplicate, un seul message et une entrée de main courante.
 
