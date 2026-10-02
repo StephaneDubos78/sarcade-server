@@ -26,8 +26,9 @@ def position(event,device,lat,lon):
     r.raise_for_status()
 
 wait()
-event=create_event()
+event=os.getenv("SARCADE_EVENT_ID") or create_event()
 print(f"EVENT_ID={event}")
+print("Mode: existing event" if os.getenv("SARCADE_EVENT_ID") else "Mode: new event")
 origin=(48.8566,2.3522)
 print("Keep SARCADE App open: positions are broadcast live over WebSocket.")
 for step in range(20):
