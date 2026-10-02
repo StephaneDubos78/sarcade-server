@@ -55,3 +55,20 @@ class POIOut(POICreate):
     event_id: str
     created_at: datetime
     version: int
+
+
+class SyncOperationIn(BaseModel):
+    operation_id: str
+    event_id: str
+    object_id: str
+    object_type: str
+    action: str
+    client_time: datetime
+    payload: dict
+
+
+class SyncResultOut(BaseModel):
+    operation_id: str
+    status: str
+    server_time: datetime
+    sync_cursor: str | None = None
