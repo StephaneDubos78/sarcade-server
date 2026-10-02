@@ -20,7 +20,10 @@ def create_event():
 def position(event,device,lat,lon):
     p={"id":str(uuid.uuid4()),"event_id":event,"device_id":device,"lat":lat,"lon":lon,
        "accuracy_m":5.0,"time":datetime.now(timezone.utc).isoformat()}
-    r=client.post(f"{BASE}/api/v0.1/positions",json=p);r.raise_for_status()
+    r=client.post(f"{BASE}/api/v0.1/positions",json=p)
+    if r.status_code >= 400:
+        print(f"Position rejected: {r.status_code} {r.text}")
+    r.raise_for_status()
 
 wait()
 event=create_event()
