@@ -113,21 +113,42 @@ async def event_websocket(websocket: WebSocket, event_id: str):
 
 
 @app.post("/api/v0.1/sync", response_model=list[SyncResultOut])
-def synchronize(operations: list[SyncOperationIn], db: Session = Depends(get_db)):
+async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(get_db)):
     results = []
+    broadcasts = []
     for op in operations:
         status, cursor = record_operation(
             db, event_id=op.event_id, operation_id=op.operation_id,
             object_id=op.object_id, object_type=op.object_type,
             action=op.action, payload=op.payload, client_time=op.client_time,
         )
+        if status == "accepted" and op.action == "create":
+            p = op.payload
+            if op.object_type == "position" and db.get(PositionRow, op.object_id) is None:
+                row = PositionRow(
+                    id=op.object_id,event_id=op.event_id,device_id=p["device_id"],
+                    point=WKTElement(f'POINT({p["lon"]} {p["lat"]})', srid=4326),
+                    alt_m=p.get("alt_m"),accuracy_m=p.get("accuracy_m"),
+                    heading_deg=p.get("heading_deg"),speed_mps=p.get("speed_mps"),
+                    time=datetime.fromisoformat(p["time"].replace("Z","+00:00")),
+                )
+                db.add(row); db.flush()
+                broadcasts.append((op.event_id, {"type":"position.updated","data":p}))
+            elif op.object_type == "poi" and db.get(POIRow, op.object_id) is None:
+                row = POIRow(
+                    id=op.object_id,event_id=op.event_id,kind=p["kind"],label=p.get("label"),
+                    point=WKTElement(f'POINT({p["lon"]} {p["lat"]})', srid=4326),
+                    created_at=datetime.fromisoformat(p["created_at"].replace("Z","+00:00")),version=0,
+                )
+                db.add(row); db.flush()
+                broadcasts.append((op.event_id, {"type":"poi.created","data":p}))
         results.append({
-            "operation_id": op.operation_id,
-            "status": status,
-            "server_time": datetime.now(UTC),
-            "sync_cursor": str(cursor) if cursor else None,
+            "operation_id": op.operation_id,"status": status,
+            "server_time": datetime.now(UTC),"sync_cursor": str(cursor) if cursor else None,
         })
     db.commit()
+    for event_id, payload in broadcasts:
+        await manager.broadcast(event_id, payload)
     return results
 
 
