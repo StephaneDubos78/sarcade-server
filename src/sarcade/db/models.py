@@ -62,3 +62,19 @@ class POIRow(Base):
     point = mapped_column(Geography(geometry_type="POINT", srid=4326), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+from sqlalchemy import BigInteger, JSON, UniqueConstraint
+
+class SyncOperationRow(Base):
+    __tablename__ = "sync_operations"
+    seq: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    operation_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    object_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    client_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    server_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
