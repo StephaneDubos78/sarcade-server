@@ -32,8 +32,8 @@ services:
       - ./:/demo:ro
     environment:
       SARCADE_URL: http://server:8000
-    entrypoint: ["sh","-c"]
-    command: ["pip install -q httpx && exec python \"$@\"", "--", "simulate.py"]
+    entrypoint: ["/bin/sh", "/demo/run-python.sh"]
+    command: ["simulate.py"]
     depends_on:
       - server
     profiles: ["simulate"]
