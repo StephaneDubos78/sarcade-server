@@ -51,3 +51,14 @@ class PositionRow(Base):
     heading_deg: Mapped[float | None] = mapped_column(Float)
     speed_mps: Mapped[float | None] = mapped_column(Float)
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class POIRow(Base):
+    __tablename__ = "pois"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=new_id)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(160))
+    point = mapped_column(Geography(geometry_type="POINT", srid=4326), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
