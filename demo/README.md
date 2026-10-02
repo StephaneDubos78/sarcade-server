@@ -41,3 +41,14 @@ docker compose -f docker-compose.demo.yml start server
 ```
 
 Le véritable test Outbox est réalisé avec SARCADE App. Ce package valide d'abord Server/PostGIS, le simulateur GPS et l'idempotence.
+
+
+## Offline First V0.1 recipe
+
+With SARCADE App open on an existing event, run from PowerShell:
+
+```powershell
+.\offline-v01.ps1 -EventId "<EVENT_ID>"
+```
+
+The recipe stops only the API server (PostgreSQL stays running), asks the operator to create a message containing `OFFLINE-V01`, restarts the server, waits for Outbox synchronization, then verifies that the offline-created message reached the server without a duplicate ID. Do not use `docker compose down -v` during this test because it destroys the demo database volume.
