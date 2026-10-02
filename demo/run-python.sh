@@ -1,4 +1,3 @@
 #!/bin/sh
-set -e
-pip install -q httpx
+pip install -q httpx || exit 1
 exec python "$@"
