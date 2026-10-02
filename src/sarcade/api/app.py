@@ -6,11 +6,12 @@ from geoalchemy2.elements import WKTElement
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from sarcade.db.models import EventRow, POIRow, PositionRow, TeamRow
+from sarcade.db.models import EventRow, POIRow, PositionRow, SyncOperationRow, TeamRow
 from sarcade.db.session import SessionLocal
 from sarcade.realtime.manager import manager
-from .schemas import EventCreate, EventOut, POICreate, POIOut, PositionCreate, PositionOut, TeamCreate, TeamOut
+from .schemas import EventCreate, EventOut, POICreate, POIOut, PositionCreate, PositionOut, SyncOperationIn, SyncResultOut, TeamCreate, TeamOut
 from .serializers import poi_dict, position_dict
+from sarcade.sync.service import record_operation
 
 app = FastAPI(title="SARCADE Server", version="0.1.0-dev")
 
@@ -109,3 +110,35 @@ async def event_websocket(websocket: WebSocket, event_id: str):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(event_id, websocket)
+
+
+@app.post("/api/v0.1/sync", response_model=list[SyncResultOut])
+def synchronize(operations: list[SyncOperationIn], db: Session = Depends(get_db)):
+    results = []
+    for op in operations:
+        status, cursor = record_operation(
+            db, event_id=op.event_id, operation_id=op.operation_id,
+            object_id=op.object_id, object_type=op.object_type,
+            action=op.action, payload=op.payload, client_time=op.client_time,
+        )
+        results.append({
+            "operation_id": op.operation_id,
+            "status": status,
+            "server_time": datetime.now(UTC),
+            "sync_cursor": str(cursor) if cursor else None,
+        })
+    db.commit()
+    return results
+
+
+@app.get("/api/v0.1/events/{event_id}/sync/changes")
+def sync_changes(event_id: str, after: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=2000), db: Session = Depends(get_db)):
+    rows = db.scalars(select(SyncOperationRow).where(
+        SyncOperationRow.event_id == event_id, SyncOperationRow.seq > after
+    ).order_by(SyncOperationRow.seq).limit(limit)).all()
+    return {
+        "changes": [{"cursor": str(r.seq), "operation_id": r.operation_id, "object_id": r.object_id,
+                     "object_type": r.object_type, "action": r.action, "payload": r.payload,
+                     "server_time": r.server_time} for r in rows],
+        "next_cursor": str(rows[-1].seq) if rows else str(after),
+    }
