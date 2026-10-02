@@ -78,3 +78,33 @@ class SyncOperationRow(Base):
     client_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     server_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
+
+
+class MessageRow(Base):
+    __tablename__ = "messages"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    sender_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    recipient_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    priority: Mapped[str] = mapped_column(String(16), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+class AckRow(Base):
+    __tablename__ = "acks"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), nullable=False)
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id"), nullable=False, index=True)
+    actor_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+class LogbookRow(Base):
+    __tablename__ = "logbook"
+    seq: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    object_id: Mapped[str | None] = mapped_column(String(64))
+    actor_id: Mapped[str | None] = mapped_column(String(64))
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
