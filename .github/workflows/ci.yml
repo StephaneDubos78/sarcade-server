@@ -36,7 +36,7 @@ jobs:
           exit 1
       - name: Verify synchronization and logbook
         working-directory: demo
-        run: docker compose -f docker-compose.demo.yml run --rm simulator python verify.py
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify.py"
       - name: Logs on failure
         if: failure()
         working-directory: demo
