@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: sarcade
+      POSTGRES_USER: sarcade
+      POSTGRES_PASSWORD: sarcade-demo
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sarcade -d sarcade"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - demo-db:/var/lib/postgresql/data
+
+  server:
+    build:
+      context: ..
+    environment:
+      DATABASE_URL: postgresql+psycopg://sarcade:sarcade-demo@postgres:5432/sarcade
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  simulator:
+    image: python:3.12-slim
+    working_dir: /demo
+    volumes:
+      - ./:/demo:ro
+    environment:
+      SARCADE_URL: http://server:8000
+    command: ["sh","-c","pip install -q httpx && python simulate.py"]
+    depends_on:
+      - server
+    profiles: ["simulate"]
+
+volumes:
+  demo-db:
