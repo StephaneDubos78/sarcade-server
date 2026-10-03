@@ -20,6 +20,8 @@ services:
       DATABASE_URL: postgresql+psycopg://sarcade:sarcade-demo@postgres:5432/sarcade
     ports:
       - "8000:8000"
+    volumes:
+      - demo-files:/var/lib/sarcade/files
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,3 +42,4 @@ services:
 
 volumes:
   demo-db:
+  demo-files:
