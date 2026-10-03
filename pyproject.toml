@@ -15,6 +15,7 @@ dependencies = [
   "psycopg[binary]>=3.2,<4",
   "geoalchemy2>=0.15,<1",
   "shapely>=2.0,<3",
+  "python-multipart>=0.0.20,<1",
   "alembic>=1.13,<2",
   "pydantic>=2.9,<3",
 ]
