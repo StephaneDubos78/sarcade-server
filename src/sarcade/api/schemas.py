@@ -72,3 +72,27 @@ class SyncResultOut(BaseModel):
     status: str
     server_time: datetime
     sync_cursor: str | None = None
+
+
+class ReferenceSiteOut(BaseModel):
+    id: str
+    category: str
+    subtype: str | None = None
+    name: str
+    callsign: str | None = None
+    lat: float
+    lon: float
+    alt_m: float | None = None
+    access: str | None = None
+    clearance: str | None = None
+    mode: str | None = None
+    rx_mhz: float | None = None
+    tx_mhz: float | None = None
+    ctcss_rx: str | None = None
+    ctcss_tx: str | None = None
+    offset: str | None = None
+    description: str | None = None
+    verified_at: str | None = None
+    source: str
+    source_layer: str
+    status: str
