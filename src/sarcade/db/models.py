@@ -121,3 +121,37 @@ class SharedFileRow(Base):
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ReferenceSiteRow(Base):
+    __tablename__ = "reference_sites"
+    __table_args__ = (
+        UniqueConstraint(
+            "source", "source_layer", "source_object_id",
+            name="uq_reference_site_source_object",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    category: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    subtype: Mapped[str | None] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    callsign: Mapped[str | None] = mapped_column(String(64))
+    point = mapped_column(Geography(geometry_type="POINT", srid=4326), nullable=False)
+    alt_m: Mapped[float | None] = mapped_column(Float)
+    access: Mapped[str | None] = mapped_column(Text)
+    clearance: Mapped[str | None] = mapped_column(Text)
+    mode: Mapped[str | None] = mapped_column(String(64))
+    rx_mhz: Mapped[float | None] = mapped_column(Float)
+    tx_mhz: Mapped[float | None] = mapped_column(Float)
+    ctcss_rx: Mapped[str | None] = mapped_column(String(32))
+    ctcss_tx: Mapped[str | None] = mapped_column(String(32))
+    offset: Mapped[str | None] = mapped_column(String(32))
+    description: Mapped[str | None] = mapped_column(Text)
+    verified_at: Mapped[str | None] = mapped_column(String(32))
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_layer: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_object_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_properties: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="active", index=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
