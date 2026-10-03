@@ -1,12 +1,16 @@
 from datetime import UTC, datetime
+import hashlib
+import os
+from pathlib import Path
 import uuid
 
-from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from geoalchemy2.elements import WKTElement
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from sarcade.db.models import AckRow, EventRow, LogbookRow, MessageRow, POIRow, PositionRow, SyncOperationRow, TeamRow
+from sarcade.db.models import AckRow, EventRow, LogbookRow, MessageRow, POIRow, PositionRow, SharedFileRow, SyncOperationRow, TeamRow
 from sarcade.db.session import SessionLocal
 from sarcade.realtime.manager import manager
 from .schemas import EventCreate, EventOut, POICreate, POIOut, PositionCreate, PositionOut, SyncOperationIn, SyncResultOut, TeamCreate, TeamOut
@@ -100,6 +104,44 @@ async def create_poi(event_id: str, payload: POICreate, db: Session = Depends(ge
 def list_pois(event_id: str, db: Session = Depends(get_db)):
     rows = db.scalars(select(POIRow).where(POIRow.event_id == event_id).order_by(POIRow.created_at)).all()
     return [poi_dict(row) for row in rows]
+
+
+
+FILE_ROOT=Path(os.getenv("SARCADE_FILE_ROOT","/var/lib/sarcade/files"))
+MAX_FILE_BYTES=int(os.getenv("SARCADE_MAX_FILE_BYTES",str(25*1024*1024)))
+
+def file_dict(r):
+    return {"id":r.id,"event_id":r.event_id,"sender_id":r.sender_id,"name":r.name,
+            "mime_type":r.mime_type,"size_bytes":r.size_bytes,"sha256":r.sha256,"created_at":r.created_at}
+
+@app.get("/api/v0.1/events/{event_id}/files")
+def list_files(event_id:str,db:Session=Depends(get_db)):
+    rows=db.scalars(select(SharedFileRow).where(SharedFileRow.event_id==event_id).order_by(SharedFileRow.created_at)).all()
+    return [file_dict(r) for r in rows]
+
+@app.post("/api/v0.1/events/{event_id}/files",status_code=201)
+async def upload_file(event_id:str,sender_id:str=Form(...),file:UploadFile=File(...),db:Session=Depends(get_db)):
+    if db.get(EventRow,event_id) is None: raise HTTPException(status_code=404,detail="event_not_found")
+    data=await file.read(MAX_FILE_BYTES+1)
+    if len(data)>MAX_FILE_BYTES: raise HTTPException(status_code=413,detail="file_too_large")
+    fid=str(uuid.uuid4()); directory=FILE_ROOT/event_id; directory.mkdir(parents=True,exist_ok=True)
+    path=directory/fid; path.write_bytes(data)
+    row=SharedFileRow(id=fid,event_id=event_id,sender_id=sender_id,name=file.filename or "file",
+        mime_type=file.content_type or "application/octet-stream",size_bytes=len(data),storage_path=str(path),
+        sha256=hashlib.sha256(data).hexdigest(),created_at=datetime.now(UTC))
+    db.add(row);db.commit();db.refresh(row)
+    db.add(LogbookRow(event_id=event_id,kind="file",object_id=row.id,actor_id=sender_id,
+        summary=f"Fichier partagé : {row.name}",time=row.created_at));db.commit()
+    await manager.broadcast(event_id,{"type":"file.created","data":file_dict(row)})
+    return file_dict(row)
+
+@app.get("/api/v0.1/events/{event_id}/files/{file_id}/content")
+def download_file(event_id:str,file_id:str,db:Session=Depends(get_db)):
+    row=db.get(SharedFileRow,file_id)
+    if row is None or row.event_id!=event_id: raise HTTPException(status_code=404,detail="file_not_found")
+    path=Path(row.storage_path)
+    if not path.is_file(): raise HTTPException(status_code=404,detail="file_content_not_found")
+    return FileResponse(path,media_type=row.mime_type,filename=row.name)
 
 
 @app.websocket("/api/v0.1/events/{event_id}/ws")
