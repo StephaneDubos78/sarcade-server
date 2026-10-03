@@ -108,3 +108,16 @@ class LogbookRow(Base):
     actor_id: Mapped[str | None] = mapped_column(String(64))
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SharedFileRow(Base):
+    __tablename__ = "shared_files"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    sender_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(160), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
