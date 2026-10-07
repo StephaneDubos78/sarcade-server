@@ -6,18 +6,19 @@ from pathlib import Path
 import uuid
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from geoalchemy2.elements import WKTElement
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from sarcade.db.models import AckRow, EventRow, LogbookRow, MessageRow, POIRow, PositionRow, ReferenceSiteRow, SharedFileRow, SyncOperationRow, TeamRow
+from sarcade.db.models import AckRow, EventRow, LogbookRow, MapFeatureRow, MessageRow, POIRow, PositionRow, ReferenceSiteRow, SharedFileRow, SyncOperationRow, TeamRow
 from sarcade.db.session import SessionLocal
 from sarcade.realtime.manager import manager
 from .schemas import EventCreate, EventOut, POICreate, POIOut, PositionCreate, PositionOut, ReferenceSiteOut, SyncOperationIn, SyncResultOut, TeamCreate, TeamOut
 from .serializers import poi_dict, position_dict, reference_site_dict
 from sarcade.reference.umap import REFERENCE_LAYERS, parse_umap_reference_sites
 from sarcade.sync.service import record_operation
+from sarcade.features import service as features
 
 app = FastAPI(title="SARCADE Server", version="0.1.0-dev")
 
@@ -296,11 +297,94 @@ async def event_websocket(websocket: WebSocket, event_id: str):
         manager.disconnect(event_id, websocket)
 
 
+def _apply_map_feature(db: Session, op, now: datetime) -> tuple[str, int, dict | None]:
+    """Validates, journals and applies one map feature change (ADR-001).
+
+    Returns (status, cursor, broadcast payload). Only accepted changes are
+    visible in the change feed, with the resulting state as payload.
+    """
+    if op.action not in features.ACTIONS:
+        return "rejected", 0, None
+    try:
+        if op.action == "delete":
+            change = features.validate_delete(op.payload, event_id=op.event_id, object_id=op.object_id)
+        else:
+            change = features.validate_upsert(op.payload, event_id=op.event_id, object_id=op.object_id)
+    except features.InvalidFeature:
+        return "rejected", 0, None
+    if db.get(EventRow, op.event_id) is None:
+        return "rejected", 0, None
+    change["updated_at"] = features.clamp_time(change["updated_at"], now)
+
+    status, cursor = record_operation(
+        db, event_id=op.event_id, operation_id=op.operation_id, object_id=op.object_id,
+        object_type=op.object_type, action=op.action, payload=op.payload, client_time=op.client_time,
+    )
+    if status != "accepted":
+        return status, cursor, None
+    journal = db.scalar(select(SyncOperationRow).where(SyncOperationRow.seq == cursor))
+
+    row = db.get(MapFeatureRow, op.object_id)
+    if row is not None and row.event_id != op.event_id:
+        journal.status = "rejected"
+        return "rejected", 0, None
+    decision = features.decide(op.action, change, row)
+    if decision.status != "accepted":
+        journal.status = "conflict"
+        return "conflict", cursor, None
+
+    was_deleted = row is not None and row.deleted_at is not None
+    if decision.tombstone:
+        unknown = row is None
+        if unknown:
+            row = MapFeatureRow(id=op.object_id, event_id=op.event_id, kind="point",
+                data={"points": [[0.0, 0.0]], "color": 0, "stroke_width": 1.0, "label": ""},
+                created_by=change["updated_by"], created_at=now, revision=0)
+            db.add(row)
+        row.deleted_at = change["updated_at"]
+        logbook_action = None if unknown or was_deleted else "delete"
+    else:
+        data = {k: v for k, v in change.items() if k not in ("updated_at", "updated_by", "id", "event_id", "kind")}
+        if row is None:
+            row = MapFeatureRow(id=op.object_id, event_id=op.event_id, created_by=change["created_by"],
+                created_at=now, revision=0)
+            db.add(row)
+            logbook_action = "create"
+        else:
+            logbook_action = "restore" if was_deleted else None
+        row.kind = change["kind"]
+        row.data = data
+        row.geom = WKTElement(features.geometry_wkt(change), srid=4326)
+        row.deleted_at = None
+    row.updated_at = change["updated_at"]
+    row.updated_by = change["updated_by"]
+    row.revision = (row.revision or 0) + 1
+    db.flush()
+
+    result = features.feature_dict(row)
+    journal.payload = result
+    if logbook_action:
+        db.add(LogbookRow(event_id=op.event_id, kind="map_feature", object_id=row.id,
+            actor_id=change["updated_by"], time=now,
+            summary=features.logbook_summary(row.kind, (row.data or {}).get("label", ""), logbook_action)))
+    kind = "map_feature.deleted" if row.deleted_at is not None else "map_feature.upserted"
+    return "accepted", cursor, {"type": kind, "data": result}
+
+
 @app.post("/api/v0.1/sync", response_model=list[SyncResultOut])
 async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(get_db)):
     results = []
     broadcasts = []
     for op in operations:
+        if op.object_type == "map_feature":
+            status, cursor, message = _apply_map_feature(db, op, datetime.now(UTC))
+            if message:
+                broadcasts.append((op.event_id, message))
+            results.append({
+                "operation_id": op.operation_id, "status": status,
+                "server_time": datetime.now(UTC), "sync_cursor": str(cursor) if cursor else None,
+            })
+            continue
         status, cursor = record_operation(
             db, event_id=op.event_id, operation_id=op.operation_id,
             object_id=op.object_id, object_type=op.object_type,
@@ -358,7 +442,8 @@ async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(g
 @app.get("/api/v0.1/events/{event_id}/sync/changes")
 def sync_changes(event_id: str, after: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=2000), db: Session = Depends(get_db)):
     rows = db.scalars(select(SyncOperationRow).where(
-        SyncOperationRow.event_id == event_id, SyncOperationRow.seq > after
+        SyncOperationRow.event_id == event_id, SyncOperationRow.seq > after,
+        SyncOperationRow.status == "accepted",
     ).order_by(SyncOperationRow.seq).limit(limit)).all()
     return {
         "changes": [{"cursor": str(r.seq), "operation_id": r.operation_id, "object_id": r.object_id,
@@ -366,6 +451,24 @@ def sync_changes(event_id: str, after: int = Query(0, ge=0), limit: int = Query(
                      "server_time": r.server_time} for r in rows],
         "next_cursor": str(rows[-1].seq) if rows else str(after),
     }
+
+
+@app.get("/api/v0.1/events/{event_id}/map-features")
+def list_map_features(event_id: str, include_deleted: bool = Query(False), db: Session = Depends(get_db)):
+    stmt = select(MapFeatureRow).where(MapFeatureRow.event_id == event_id)
+    if not include_deleted:
+        stmt = stmt.where(MapFeatureRow.deleted_at.is_(None))
+    rows = db.scalars(stmt.order_by(MapFeatureRow.created_at)).all()
+    return [features.feature_dict(r) for r in rows]
+
+
+@app.get("/api/v0.1/events/{event_id}/map-features.geojson")
+def map_features_geojson(event_id: str, db: Session = Depends(get_db)):
+    rows = db.scalars(select(MapFeatureRow).where(
+        MapFeatureRow.event_id == event_id, MapFeatureRow.deleted_at.is_(None)
+    ).order_by(MapFeatureRow.created_at)).all()
+    return JSONResponse({"type": "FeatureCollection", "features": [features.feature_geojson(r) for r in rows]},
+                        media_type="application/geo+json")
 
 
 @app.get("/api/v0.1/events/{event_id}/messages")
