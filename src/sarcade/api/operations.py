@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from sarcade.aprs import callsigns as calls
 from sarcade.db.models import DeviceRow, EventRow, LogbookRow
 from sarcade.events import settings as event_settings
 from sarcade.realtime.manager import manager
@@ -39,6 +40,8 @@ class Heartbeat(BaseModel):
     oldest_pending_at: datetime | None = None
     tracking_enabled: bool | None = None
     tracking_interval_s: int | None = Field(default=None, ge=1, le=86400)
+    callsign: str | None = Field(default=None, max_length=16)
+    aprs_tx_consent: bool | None = None
 
 
 def clean_battery(value) -> int | None:
@@ -67,6 +70,7 @@ def device_dict(row: DeviceRow, settings: dict, now: datetime) -> dict:
         "battery_pct": row.battery_pct, "pending_count": row.pending_count,
         "oldest_pending_at": utc(row.oldest_pending_at),
         "tracking_enabled": row.tracking_enabled, "tracking_interval_s": row.tracking_interval_s,
+        "callsign": row.callsign, "aprs_tx_consent": row.aprs_tx_consent,
         "last_contact_at": utc(row.last_contact_at), "last_position_at": utc(row.last_position_at),
         "status": event_settings.device_status(row.last_contact_at, settings, now),
     }
@@ -145,8 +149,16 @@ async def heartbeat(event_id: str, device_id: str, payload: Heartbeat, db: Sessi
     event = _event_or_404(db, event_id)
     now = datetime.now(UTC)
     row = touch_device(db, event_id, device_id, now, battery_pct=payload.battery_pct)
+    if payload.callsign is not None:
+        if payload.callsign.strip():
+            try:
+                row.callsign = calls.normalize(payload.callsign)
+            except calls.InvalidCallsign:
+                raise HTTPException(status_code=422, detail="invalid_callsign")
+        else:
+            row.callsign = None
     for field in ("label", "platform", "app_version", "pending_count",
-                  "oldest_pending_at", "tracking_enabled"):
+                  "oldest_pending_at", "tracking_enabled", "aprs_tx_consent"):
         value = getattr(payload, field)
         if value is not None:
             setattr(row, field, value)
