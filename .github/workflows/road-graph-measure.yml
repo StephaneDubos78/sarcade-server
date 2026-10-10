@@ -47,6 +47,19 @@ jobs:
           echo "Build peak memory: $(grep 'Maximum resident' build-time.txt | awk '{print int($6/1024)}') MB" >> "$GITHUB_STEP_SUMMARY"
       - name: Measure size and routing time
         run: python scripts/measure_road_graph.py graph.srg.gz --trips 20 --build-s "$BUILD_S" | tee measure.json
+      - name: Key figures as annotations
+        run: |
+          python3 - <<'PY'
+          import json
+          m = json.load(open("measure.json"))
+          print(f"::notice title=Road graph size::package {m['package_bytes']/1e6:.1f} MB (raw {m['raw_bytes']/1e6:.1f} MB), "
+                f"{m['vertices']} vertices, {m['edges']} edges, {m['geometry_points']} shape points, build {m['build_s']:.0f} s, "
+                f"python parse {m['parse_s_python']} s, peak {m['peak_rss_mb']} MB")
+          for mode, r in m["modes"].items():
+              print(f"::notice title=Routing {mode}::{r['found']}/{r['trips']} found, median {r['median_ms']} ms, "
+                    f"max {r['max_ms']} ms, median settled {r['median_settled']}")
+          PY
+          echo "::notice title=Build memory::$(grep 'Maximum resident' build-time.txt | awk '{print int($6/1024)}') MB"
       - uses: actions/upload-artifact@v4
         with:
           name: road-graph-yvelines
