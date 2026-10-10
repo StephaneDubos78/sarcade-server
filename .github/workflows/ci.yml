@@ -61,6 +61,9 @@ jobs:
       - name: Verify navigation (routing stand-in, closed roads, route legs, shared itineraries)
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_navigation.py"
+      - name: Verify base maps (catalog, custom layers, offline MBTiles packages)
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_basemaps.py"
       - name: Verify the embedded web client
         run: |
           curl -fsS http://localhost:8000/ -o index.html

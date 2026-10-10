@@ -29,6 +29,7 @@ services:
       - "8000:8000"
     volumes:
       - demo-files:/var/lib/sarcade/files
+      - demo-tiles:/var/lib/sarcade/tiles
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,3 +59,4 @@ services:
 volumes:
   demo-db:
   demo-files:
+  demo-tiles:
