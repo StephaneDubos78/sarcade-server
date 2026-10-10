@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Start SARCADE demo stack
         working-directory: demo
-        run: docker compose -f docker-compose.demo.yml up -d --build postgres weather-stub server
+        run: docker compose -f docker-compose.demo.yml up -d --build postgres services-stub server
       - name: Wait for API
         run: |
           for i in {1..40}; do
@@ -58,6 +58,9 @@ jobs:
       - name: Verify routes with waypoints
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_routes.py"
+      - name: Verify navigation (routing stand-in, closed roads, route legs, shared itineraries)
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_navigation.py"
       - name: Verify the embedded web client
         run: |
           curl -fsS http://localhost:8000/ -o index.html

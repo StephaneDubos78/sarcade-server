@@ -33,11 +33,43 @@ services:
       # Weather (docs/weather-v0.1.md)
       SARCADE_DEPARTMENT: ${SARCADE_DEPARTMENT:-}
       SARCADE_METEOFRANCE_API_KEY: ${SARCADE_METEOFRANCE_API_KEY:-}
+      # Navigation (docs/navigation-v0.1.md): start with --profile routing.
+      SARCADE_VALHALLA_URL: ${SARCADE_VALHALLA_URL:-}
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
 
+  # Navigation level 2 (docker compose --profile routing up -d):
+  # OpenStreetMap extract of the ADRASEC department plus 10 km, then Valhalla.
+  osm-extract:
+    profiles: ["routing"]
+    image: debian:bookworm-slim
+    environment:
+      SARCADE_OSM_PBF_URL: ${SARCADE_OSM_PBF_URL:-https://download.geofabrik.de/europe/france/ile-de-france-latest.osm.pbf}
+      # minlon,minlat,maxlon,maxlat: Yvelines plus about 10 km (approximate, to check).
+      SARCADE_ROUTING_BBOX: ${SARCADE_ROUTING_BBOX:-1.31,48.35,2.37,49.18}
+    volumes:
+      - ./docker/osm-extract.sh:/osm-extract.sh:ro
+      - sarcade-valhalla:/custom_files
+    command: ["sh", "/osm-extract.sh"]
+
+  valhalla:
+    profiles: ["routing"]
+    image: ghcr.io/valhalla/valhalla-scripted:latest
+    environment:
+      build_elevation: "False"
+      build_admins: "True"
+      build_time_zones: "True"
+    ports:
+      - "8002:8002"
+    volumes:
+      - sarcade-valhalla:/custom_files
+    depends_on:
+      osm-extract:
+        condition: service_completed_successfully
+
 volumes:
   sarcade-postgres:
+  sarcade-valhalla:

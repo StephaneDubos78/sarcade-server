@@ -28,6 +28,7 @@ from . import groups as groups_api
 from . import aprs as aprs_api
 from . import weather as weather_api
 from . import routes as routes_api
+from . import navigation as navigation_api
 from sarcade.weather import service as weather_service
 from sarcade.aprs import links as aprs_links
 from sarcade.aprs import service as aprs_service
@@ -40,6 +41,7 @@ _background_tasks: list = []
 async def lifespan(_app):
     aprs_links.start(_background_tasks)
     weather_service.start(_background_tasks)
+    navigation_api.start(_background_tasks)
     yield
     for task in _background_tasks:
         task.cancel()
@@ -51,6 +53,7 @@ app.include_router(groups_api.router)
 app.include_router(aprs_api.router)
 app.include_router(weather_api.router)
 app.include_router(routes_api.router)
+app.include_router(navigation_api.router)
 
 
 @app.get("/health")
@@ -425,7 +428,7 @@ async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(g
     broadcasts = []
     notices: dict[str, routes_api.Notices] = {}
     for op in operations:
-        if op.object_type in ("route", "route_waypoint", "route_passage"):
+        if op.object_type in routes_api.SYNC_TYPES:
             batch = notices.setdefault(op.event_id, routes_api.Notices())
             status, cursor, message = routes_api.apply_route_object(db, op, datetime.now(UTC), batch)
             if message:
