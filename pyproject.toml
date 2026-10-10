@@ -24,7 +24,7 @@ dependencies = [
   # OpenStreetMap reading for the road graph of navigation on the device.
   "osmium>=3.7,<5",
   # Ed25519 signatures of the SARCADE Pro licences, verified offline.
-  "cryptography>=44,<47",
+  "cryptography>=50",
 ]
 
 [project.optional-dependencies]
