@@ -37,10 +37,11 @@ class PositionCreate(BaseModel):
     heading_deg: float | None = Field(default=None, ge=0, lt=360)
     speed_mps: float | None = Field(default=None, ge=0)
     time: datetime
+    battery_pct: int | None = Field(default=None, ge=0, le=100)
 
 
 class PositionOut(PositionCreate):
-    pass
+    source: str = "device"
 
 
 class POICreate(BaseModel):

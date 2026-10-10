@@ -10,6 +10,7 @@ def position_dict(row: PositionRow) -> dict:
         "lat": p.y, "lon": p.x, "alt_m": row.alt_m,
         "accuracy_m": row.accuracy_m, "heading_deg": row.heading_deg,
         "speed_mps": row.speed_mps, "time": row.time,
+        "battery_pct": row.battery_pct, "source": row.source or "device",
     }
 
 
