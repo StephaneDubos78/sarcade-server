@@ -21,6 +21,7 @@ from .deps import get_db
 router = APIRouter(prefix="/api/v0.1")
 _META = ("id", "event_id", "updated_at", "updated_by", "created_by", "base_point_order")
 SYSTEM_SENDER = "SARCADE"
+SYNC_TYPES = ("route", "route_waypoint", "route_passage", "road_closure", "itinerary")
 
 
 def object_dict(row: RouteObjectRow) -> dict:
@@ -72,7 +73,14 @@ def apply_route_object(db: Session, op, now: datetime, notices: Notices) -> tupl
     # Rights: an assigned route and its waypoints are changed only by the
     # route author and the PCO. Passages are recorded by the team.
     actor = change["updated_by"]
-    if kind == "route":
+    if kind == "road_closure" and not groups.is_pco(actor):
+        return "rejected", 0, None  # roads are closed and reopened by the PCO
+    if kind == "itinerary" and row is not None and actor not in (row.created_by, row.data.get("device_id")) \
+            and not groups.is_pco(actor):
+        return "rejected", 0, None
+    if kind in ("road_closure", "itinerary"):
+        route_row = None
+    elif kind == "route":
         if row is not None and not routes.can_edit(row.data, row.created_by, actor):
             return "rejected", 0, None
         route_row = row
@@ -106,7 +114,7 @@ def apply_route_object(db: Session, op, now: datetime, notices: Notices) -> tupl
         row.deleted_at = change["updated_at"]
     else:
         row.data = {k: v for k, v in change.items() if k not in _META}
-        row.route_id = change.get("route_id") if kind != "route" else row.id
+        row.route_id = row.id if kind == "route" else change.get("route_id")
         row.deleted_at = None
     row.updated_at, row.updated_by = change["updated_at"], actor
     row.revision = (row.revision or 0) + 1
@@ -160,6 +168,24 @@ def _logbook_and_notices(db, event_id, kind, row, before, was_deleted, change, r
             notices.add(route_row.id, f"point « {name} » déplacé")
         elif before != row.data:
             notices.add(route_row.id, f"point « {name} » modifié")
+        return
+    if kind == "road_closure":
+        label = (row.data or {}).get("label") or (before or {}).get("label", "")
+        active = row.deleted_at is None and (row.data or {}).get("active", True)
+        was_active = before is not None and not was_deleted and before.get("active", True)
+        if active and not was_active:
+            log(f"Route coupée : « {label} »")
+        elif was_active and not active:
+            log(f"Route rouverte : « {label} »")
+        return
+    if kind == "itinerary" and row.deleted_at is None:
+        d = row.data
+        dest = d.get("destination", {}).get("label") or "point désigné"
+        who = d.get("team_id") or d.get("device_id")
+        if before is None:
+            log(f"Départ de {who} vers « {dest} »")
+        elif d.get("status") == "arrived" and before.get("status") != "arrived":
+            log(f"Arrivée de {who} à « {dest} »")
         return
     if kind == "route_passage" and row.deleted_at is None:
         waypoint = db.get(RouteObjectRow, row.data.get("waypoint_id"))
@@ -234,6 +260,23 @@ def list_routes(event_id: str, db: Session = Depends(get_db)):
         if r.kind != "route":
             by_route.setdefault(r.route_id, []).append(r)
     return [route_view(r, by_route.get(r.id, [])) for r in rows if r.kind == "route" and r.deleted_at is None]
+
+
+@router.get("/events/{event_id}/road-closures")
+def list_closures(event_id: str, db: Session = Depends(get_db)):
+    rows = db.scalars(select(RouteObjectRow).where(RouteObjectRow.event_id == event_id,
+                                                   RouteObjectRow.kind == "road_closure",
+                                                   RouteObjectRow.deleted_at.is_(None))).all()
+    return [object_dict(r) for r in rows]
+
+
+@router.get("/events/{event_id}/itineraries")
+def list_itineraries(event_id: str, db: Session = Depends(get_db)):
+    """Shared itineraries: planned path and estimated arrival for the PCO."""
+    rows = db.scalars(select(RouteObjectRow).where(RouteObjectRow.event_id == event_id,
+                                                   RouteObjectRow.kind == "itinerary",
+                                                   RouteObjectRow.deleted_at.is_(None))).all()
+    return [object_dict(r) for r in rows]
 
 
 @router.get("/events/{event_id}/routes/{route_id}.gpx")
