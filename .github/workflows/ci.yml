@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Start SARCADE demo stack
         working-directory: demo
-        run: docker compose -f docker-compose.demo.yml up -d --build postgres server
+        run: docker compose -f docker-compose.demo.yml up -d --build postgres weather-stub server
       - name: Wait for API
         run: |
           for i in {1..40}; do
@@ -52,6 +52,9 @@ jobs:
       - name: Verify APRS (callsign groups, filtering, deduplication)
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_aprs.py"
+      - name: Verify the weather (stub of Open-Meteo and vigilance)
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_weather.py"
       - name: Verify the embedded web client
         run: |
           curl -fsS http://localhost:8000/ -o index.html
