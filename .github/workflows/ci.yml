@@ -83,6 +83,21 @@ jobs:
       - name: Verify the road graph for navigation on the device and the navigation app setting
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_offline_routing.py"
+      - name: Verify HTTPS through the reverse proxy (option B, local CA)
+        working-directory: demo
+        run: |
+          docker compose -f docker-compose.demo.yml --profile https up -d --build https
+          for i in {1..30}; do
+            curl -fsS -H "Host: sarcade.test" http://localhost:8081/sarcade-root.crt -o root.crt && break
+            sleep 2
+          done
+          grep -q "BEGIN CERTIFICATE" root.crt
+          # Everything else over plain HTTP is redirected to HTTPS.
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: sarcade.test' http://localhost:8081/health)" = "308"
+          # The server answers over HTTPS with the certificate of the local CA.
+          curl -fsS --cacert root.crt --resolve sarcade.test:8443:127.0.0.1 https://sarcade.test:8443/health
+          curl -fsS --cacert root.crt --resolve sarcade.test:8443:127.0.0.1 https://sarcade.test:8443/api/v0.1/clients/config \
+            | python3 -c "import json,sys; h=json.load(sys.stdin)['https']; assert h['url']=='https://sarcade.test', h; assert h['root_certificate_url'].endswith('/sarcade-root.crt'), h; print(h)"
       - name: Verify the embedded web client
         run: |
           curl -fsS http://localhost:8000/ -o index.html
@@ -100,4 +115,4 @@ jobs:
       - name: Stop stack
         if: always()
         working-directory: demo
-        run: docker compose -f docker-compose.demo.yml down -v
+        run: docker compose -f docker-compose.demo.yml --profile https down -v

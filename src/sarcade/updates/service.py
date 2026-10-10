@@ -51,6 +51,15 @@ def admin_settings(db: Session) -> dict:
     return policy.validate(get_value(db, "admin", {}) or {})
 
 
+def client_organization(db: Session) -> dict:
+    """Settings of the organisation applied by the clients: navigation app
+    and HTTPS address the clients switch to (docs/https-v0.1.md)."""
+    from sarcade import tls
+    t = tls.state()
+    return {"navigation": admin_settings(db)["navigation"],
+            "https": {"url": t["https_url"], "root_certificate_url": t["root_certificate_url"]}}
+
+
 def merge_patch(current: dict, patch: dict) -> dict:
     out = dict(current)
     for key, value in patch.items():
