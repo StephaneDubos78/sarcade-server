@@ -200,12 +200,18 @@ def rebuild_graph() -> dict | None:
     return info
 
 
+graph_state: dict = {"last_error": None, "source_found": None}
+
+
 async def graph_loop() -> None:
     """Builds the graph when the OSM extract is newer (weekly refresh)."""
     while True:
+        graph_state["source_found"] = os.path.isfile(osm_path())
         try:
             await asyncio.to_thread(rebuild_graph)
+            graph_state["last_error"] = None
         except Exception as exc:  # noqa: BLE001
+            graph_state["last_error"] = f"{type(exc).__name__}: {exc}"[:300]
             log.warning("road graph not built: %s", exc)
         await asyncio.sleep(3600)
 
@@ -214,7 +220,7 @@ async def graph_loop() -> None:
 def road_graph_info():
     """Version of the road graph the apps download (Wi-Fi or local network)."""
     info = graph_info()
-    return {"available": info is not None, **(info or {})}
+    return {"available": info is not None, **(info or {}), "build": dict(graph_state)}
 
 
 @router.get("/routing/graph")
