@@ -6,6 +6,7 @@ from pathlib import Path
 import uuid
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 from geoalchemy2.elements import WKTElement
 from sqlalchemy import func, or_, select
@@ -19,6 +20,7 @@ from .serializers import poi_dict, position_dict, reference_site_dict
 from sarcade.reference.umap import REFERENCE_LAYERS, parse_umap_reference_sites
 from sarcade.sync.service import record_operation
 from sarcade.features import service as features
+from sarcade.messages import attachments as msg_attachments
 
 app = FastAPI(title="SARCADE Server", version="0.1.0-dev")
 
@@ -263,15 +265,25 @@ def list_files(event_id:str,db:Session=Depends(get_db)):
     return [file_dict(r) for r in rows]
 
 @app.post("/api/v0.1/events/{event_id}/files",status_code=201)
-async def upload_file(event_id:str,sender_id:str=Form(...),file:UploadFile=File(...),db:Session=Depends(get_db)):
+async def upload_file(event_id:str,sender_id:str=Form(...),file:UploadFile=File(...),
+                      file_id:str|None=Form(None),mime_type:str|None=Form(None),db:Session=Depends(get_db)):
+    """[file_id], chosen by the client, makes the upload idempotent: an upload
+    retried after a network loss returns the stored file instead of a copy."""
     if db.get(EventRow,event_id) is None: raise HTTPException(status_code=404,detail="event_not_found")
+    if file_id is not None and not msg_attachments.valid_file_id(file_id):
+        raise HTTPException(status_code=422,detail="invalid_file_id")
     data=await file.read(MAX_FILE_BYTES+1)
     if len(data)>MAX_FILE_BYTES: raise HTTPException(status_code=413,detail="file_too_large")
-    fid=str(uuid.uuid4()); directory=FILE_ROOT/event_id; directory.mkdir(parents=True,exist_ok=True)
+    digest=hashlib.sha256(data).hexdigest()
+    if file_id is not None and (existing:=db.get(SharedFileRow,file_id)) is not None:
+        if existing.event_id!=event_id or existing.sha256!=digest:
+            raise HTTPException(status_code=409,detail="file_id_conflict")
+        return JSONResponse(jsonable_encoder(file_dict(existing)),status_code=200)
+    fid=file_id or str(uuid.uuid4()); directory=FILE_ROOT/event_id; directory.mkdir(parents=True,exist_ok=True)
     path=directory/fid; path.write_bytes(data)
     row=SharedFileRow(id=fid,event_id=event_id,sender_id=sender_id,name=file.filename or "file",
-        mime_type=file.content_type or "application/octet-stream",size_bytes=len(data),storage_path=str(path),
-        sha256=hashlib.sha256(data).hexdigest(),created_at=datetime.now(UTC))
+        mime_type=msg_attachments.clean_mime_type(mime_type or file.content_type),size_bytes=len(data),storage_path=str(path),
+        sha256=digest,created_at=datetime.now(UTC))
     db.add(row);db.commit();db.refresh(row)
     db.add(LogbookRow(event_id=event_id,kind="file",object_id=row.id,actor_id=sender_id,
         summary=f"Fichier partagé : {row.name}",time=row.created_at));db.commit()
@@ -284,7 +296,9 @@ def download_file(event_id:str,file_id:str,db:Session=Depends(get_db)):
     if row is None or row.event_id!=event_id: raise HTTPException(status_code=404,detail="file_not_found")
     path=Path(row.storage_path)
     if not path.is_file(): raise HTTPException(status_code=404,detail="file_content_not_found")
-    return FileResponse(path,media_type=row.mime_type,filename=row.name)
+    # Same origin as the web client: never let a browser sniff or render an
+    # uploaded file as a page.
+    return FileResponse(path,media_type=row.mime_type,filename=row.name,headers={"X-Content-Type-Options":"nosniff"})
 
 
 @app.websocket("/api/v0.1/events/{event_id}/ws")
@@ -385,6 +399,13 @@ async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(g
                 "server_time": datetime.now(UTC), "sync_cursor": str(cursor) if cursor else None,
             })
             continue
+        if op.object_type == "message" and op.action == "create":
+            try:
+                op.payload["attachments"] = msg_attachments.clean_attachments(op.payload.get("attachments"))
+            except ValueError:
+                results.append({"operation_id": op.operation_id, "status": "rejected",
+                                "server_time": datetime.now(UTC), "sync_cursor": None})
+                continue
         status, cursor = record_operation(
             db, event_id=op.event_id, operation_id=op.operation_id,
             object_id=op.object_id, object_type=op.object_type,
@@ -413,10 +434,11 @@ async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(g
             elif op.object_type == "message" and db.get(MessageRow, op.object_id) is None:
                 row = MessageRow(id=op.object_id,event_id=op.event_id,sender_id=p["sender_id"],
                     recipient_ids=p.get("recipient_ids",[]),priority=p.get("priority","routine"),
-                    body=p["body"],created_at=datetime.fromisoformat(p["created_at"].replace("Z","+00:00")))
+                    body=p["body"],attachments=p["attachments"] or None,
+                    created_at=datetime.fromisoformat(p["created_at"].replace("Z","+00:00")))
                 db.add(row); db.flush()
                 db.add(LogbookRow(event_id=op.event_id,kind="message",object_id=row.id,
-                    actor_id=row.sender_id,summary=row.body,time=row.created_at))
+                    actor_id=row.sender_id,summary=msg_attachments.logbook_summary(row.body,p["attachments"]),time=row.created_at))
                 broadcasts.append((op.event_id, {"type":"message.created","data":p}))
             elif op.object_type == "ack" and db.get(AckRow, op.object_id) is None:
                 if db.get(MessageRow, p["message_id"]) is None:
@@ -475,7 +497,7 @@ def map_features_geojson(event_id: str, db: Session = Depends(get_db)):
 def list_messages(event_id: str, limit: int = Query(200, ge=1, le=2000), db: Session = Depends(get_db)):
     rows = db.scalars(select(MessageRow).where(MessageRow.event_id == event_id).order_by(MessageRow.created_at.desc()).limit(limit)).all()
     return [{"id":r.id,"event_id":r.event_id,"sender_id":r.sender_id,"recipient_ids":r.recipient_ids,
-             "priority":r.priority,"body":r.body,"created_at":r.created_at} for r in reversed(rows)]
+             "priority":r.priority,"body":r.body,"attachments":r.attachments or [],"created_at":r.created_at} for r in reversed(rows)]
 
 @app.get("/api/v0.1/events/{event_id}/logbook")
 def list_logbook(event_id: str, after: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=2000), db: Session = Depends(get_db)):
