@@ -74,7 +74,7 @@ check(r["status"] == "invited" and r["deadline"], "outdated client invited, 2 ho
 hb = c.post(f"{API}/events/{event}/devices/{device}/heartbeat", json={"app_version": "0.1.0", "platform": "windows"})
 check(hb.json()["client_update"]["status"] == "invited", "invitation also carried by the heartbeat")
 pkg = c.put(f"{API}/admin/clients/windows/package", headers=ADMIN, data={"version": "0.2.0"},
-            files={"file": ("sarcade.msix", b"MSIX-demo-package", "application/octet-stream")})
+            files={"file": ("sarcade-windows-setup.exe", b"MSIX-demo-package", "application/octet-stream")})
 check(pkg.status_code == 200 and len(pkg.json()["sha256"]) == 64, "client package uploaded to the local server")
 check(c.get(f"{API}/clients/latest").json()["windows"]["version"] == "0.2.0", "latest client versions listed")
 check(c.get(f"{API}/clients/windows/package").content == b"MSIX-demo-package", "client package served on the network")

@@ -28,7 +28,7 @@ from .deps import get_db
 router = APIRouter(prefix="/api/v0.1")
 MAX_CLIENT_PACKAGE_BYTES = int(os.getenv("SARCADE_MAX_CLIENT_PACKAGE_BYTES", str(512 * 1024 ** 2)))
 # File names are constants: the platform given in the URL only selects one.
-CLIENT_FILES = {"windows": "sarcade-windows.msix", "appimage": "sarcade-appimage.AppImage",
+CLIENT_FILES = {"windows": "sarcade-windows-setup.exe", "appimage": "sarcade-appimage.AppImage",
                 "apk": "sarcade-apk.apk"}
 
 
