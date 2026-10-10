@@ -32,3 +32,6 @@ certs/
 # Docker
 docker-compose.override.yml
 *.egg-info/
+
+# Ephemeral test licence chain (demo/make_test_licence.py)
+demo/licence-test/

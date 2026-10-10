@@ -89,10 +89,28 @@ for needle in ("client_invited", "client_updated", "server_update_signature_inva
 
 v = c.get(f"{API}/admin/security-journal/verify", headers=ADMIN).json()
 check(v["ok"] and v["count"] > 10, "chained journal intact")
+# SARCADE Pro licence: signed, verified offline, uploaded in the admin tool.
+LICENCE = os.getenv("SARCADE_TEST_LICENCE", "/demo/licence-test/licence.json")
+check(c.get(f"{API}/admin/licence", headers=ADMIN).json()["status"] == "none", "no licence: Core only")
+check(c.put(f"{API}/admin/licence", headers=ADMIN, content=b"not a licence").status_code == 422,
+      "unreadable licence refused")
+with open(LICENCE, "rb") as fh:
+    good = fh.read()
+forged = good.replace(b'"siem"', b'"siem", "locate"', 1)
+r = c.put(f"{API}/admin/licence", headers=ADMIN, content=forged)
+check(r.status_code == 422 and r.json()["detail"]["reason"] == "bad_signature", "modified licence refused")
+r = c.put(f"{API}/admin/licence", headers=ADMIN, content=good)
+check(r.status_code == 200 and r.json()["status"] == "valid" and r.json()["test"] and r.json()["modules"] == ["siem"],
+      "signed test licence installed")
+check(c.get(f"{API}/clients/config").json()["pro"] == {"modules": ["siem"], "status": "valid"},
+      "Pro modules announced to the applications")
 status = c.get(f"{API}/admin/status", headers=ADMIN).json()
 check("siem" in status["pro_modules"], "SIEM module enabled (Pro)")
+lic_journal = [e["action"] for e in c.get(f"{API}/admin/security-journal", headers=ADMIN,
+                                          params={"category": "admin"}).json()]
+check("licence_uploaded" in lic_journal and "licence_checked" in lic_journal, "licence journaled")
 received = []
-for _ in range(20):
+for _ in range(45):
     received = c.get(f"{STUB}/siem/received").json()
     if any("update.client_invited" in line for line in received):
         break

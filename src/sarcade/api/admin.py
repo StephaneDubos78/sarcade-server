@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import hashlib
 import hmac
+import json
 import os
 from pathlib import Path
 import shutil
@@ -18,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from sarcade import licensing, tls
+from sarcade.licensing import core as licence_core
 from sarcade.db.models import SecurityEventRow, ServerUpdateRow
 from sarcade.security import journal, siem
 from sarcade.updates import policy
@@ -191,8 +193,50 @@ def update_report(payload: UpdateReport, request: Request, _admin: str = Depends
 @router.get("/admin/status")
 def admin_status(_admin: str = Depends(require_admin)):
     return {"version": updates.installed_version(), "server_id": journal.server_id(),
-            "pro_modules": sorted(licensing.enabled_modules()), "siem": dict(siem.state),
+            "pro_modules": sorted(licensing.enabled_modules()), "licence": licensing.state().as_dict(),
+            "siem": dict(siem.state),
             "tls": tls.state()}
+
+
+# --- SARCADE Pro licence ------------------------------------------------------
+
+MAX_LICENCE_BYTES = 64 * 1024
+
+
+@router.get("/admin/licence")
+def get_licence(_admin: str = Depends(require_admin)):
+    """State of the Pro licence: organisation, modules, expiry, grace."""
+    return licensing.state().as_dict()
+
+
+@router.put("/admin/licence")
+async def put_licence(request: Request, _admin: str = Depends(require_admin), db: Session = Depends(get_db)):
+    """Upload of a licence file (JSON). Checked offline before installation;
+    an invalid or expired licence never replaces the installed one."""
+    body = await request.body()
+    if len(body) > MAX_LICENCE_BYTES:
+        raise HTTPException(status_code=413, detail="licence_too_large")
+    try:
+        document = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        document = None
+    result = licensing.install(document) if isinstance(document, dict) else licence_core.verify({"format": "?"})
+    accepted = result.status not in ("invalid", "expired", "none")
+    lic = result.licence or {}
+    journal.record(db, "admin", "licence_uploaded", "success" if accepted else "refused",
+                   source_ip=client_ip(request),
+                   details={"licence_id": lic.get("id"), "status": result.status, "reason": result.reason,
+                            "modules": ",".join(sorted(result.modules)), "test": result.test})
+    db.commit()
+    if not accepted:
+        raise HTTPException(status_code=422, detail={"error": "licence_refused", "status": result.status,
+                                                     "reason": result.reason})
+    return result.as_dict()
+
+
+@router.post("/admin/licence/check")
+def check_licence(_admin: str = Depends(require_admin)):
+    return licensing.check().as_dict()
 
 
 # --- Client applications ------------------------------------------------------
