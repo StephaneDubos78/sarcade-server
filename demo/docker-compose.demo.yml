@@ -18,6 +18,11 @@ services:
       context: ..
     environment:
       DATABASE_URL: postgresql+psycopg://sarcade:sarcade-demo@postgres:5432/sarcade
+      # The demo has no Internet: weather comes from a local stub.
+      SARCADE_WEATHER: "0"
+      SARCADE_OPEN_METEO_URL: http://weather-stub:8080
+      SARCADE_VIGILANCE_URL: http://weather-stub:8080/vigilance
+      SARCADE_METEOFRANCE_API_KEY: demo
     ports:
       - "8000:8000"
     volumes:
@@ -25,7 +30,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      weather-stub:
+        condition: service_started
     restart: on-failure
+
+  weather-stub:
+    image: python:3.12-slim
+    volumes:
+      - ./weather_stub.py:/stub/weather_stub.py:ro
+    command: ["python", "/stub/weather_stub.py"]
 
   simulator:
     image: python:3.12-slim

@@ -228,3 +228,11 @@ class AprsGroupRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_by: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class WeatherCacheRow(Base):
+    """Last forecast or vigilance fetched, served without Internet."""
+    __tablename__ = "weather_cache"
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

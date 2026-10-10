@@ -26,6 +26,8 @@ from .deps import get_db
 from . import operations as event_ops
 from . import groups as groups_api
 from . import aprs as aprs_api
+from . import weather as weather_api
+from sarcade.weather import service as weather_service
 from sarcade.aprs import links as aprs_links
 from sarcade.aprs import service as aprs_service
 from sarcade.groups import service as groups
@@ -36,6 +38,7 @@ _background_tasks: list = []
 @asynccontextmanager
 async def lifespan(_app):
     aprs_links.start(_background_tasks)
+    weather_service.start(_background_tasks)
     yield
     for task in _background_tasks:
         task.cancel()
@@ -45,6 +48,7 @@ app = FastAPI(title="SARCADE Server", version="0.1.0-dev", lifespan=lifespan)
 app.include_router(event_ops.router)
 app.include_router(groups_api.router)
 app.include_router(aprs_api.router)
+app.include_router(weather_api.router)
 
 
 @app.get("/health")
