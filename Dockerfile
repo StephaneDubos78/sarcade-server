@@ -1,12 +1,19 @@
 FROM python:3.12-slim
 
 WORKDIR /app
-COPY pyproject.toml .
+# Dependencies pinned by uv.lock and checked against their hashes, so that
+# every build is reproducible (note « Mises à jour et sécurité »).
+COPY pyproject.toml uv.lock ./
+RUN pip install --no-cache-dir uv==0.11.32 \
+    && uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /tmp/requirements.txt \
+    && pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
+    && pip uninstall -y uv && rm /tmp/requirements.txt
 COPY src ./src
 COPY migrations ./migrations
 COPY alembic.ini .
-
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir --no-deps -e .
+ARG SARCADE_VERSION=""
+ENV SARCADE_VERSION=${SARCADE_VERSION}
 
 # Web client (browsers, ChromeOS PWA) served at "/". Empty URL = API only.
 # Change SARCADE_WEB_CACHEBUST to fetch a newer client without --no-cache.

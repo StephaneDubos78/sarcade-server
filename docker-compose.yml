@@ -21,6 +21,9 @@ services:
       - "1883:1883"
 
   server:
+    # Signed image published on ghcr.io (docker/updater.sh installs the new
+    # versions in the maintenance windows); built locally when absent.
+    image: ghcr.io/stephanedubos78/sarcade-server:${SARCADE_IMAGE_TAG:-edge}
     build: .
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sarcade}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-sarcade}
@@ -38,10 +41,24 @@ services:
       # Base maps (docs/basemaps-v0.1.md): offline MBTiles packages.
       SARCADE_TILES_ROOT: /var/lib/sarcade/tiles
       SARCADE_MAX_TILE_PACKAGE_BYTES: ${SARCADE_MAX_TILE_PACKAGE_BYTES:-4294967296}
+      # Updates and security (docs/security-updates-v0.1.md). The admin
+      # token is placed by the operator in .env, never in the repository.
+      SARCADE_ADMIN_TOKEN: ${SARCADE_ADMIN_TOKEN:-}
+      SARCADE_SERVER_ID: ${SARCADE_SERVER_ID:-}
+      SARCADE_UPDATE_CHECK: ${SARCADE_UPDATE_CHECK:-1}
+      SARCADE_FILE_ROOT: /var/lib/sarcade/files
+      # SIEM (SARCADE Pro, module « siem »): Wazuh syslog over TLS.
+      SARCADE_PRO_MODULES: ${SARCADE_PRO_MODULES:-}
+      SARCADE_SIEM_HOST: ${SARCADE_SIEM_HOST:-}
+      SARCADE_SIEM_PORT: ${SARCADE_SIEM_PORT:-6514}
+      SARCADE_SIEM_FORMAT: ${SARCADE_SIEM_FORMAT:-syslog}
+      SARCADE_SIEM_TLS: ${SARCADE_SIEM_TLS:-1}
+      SARCADE_SIEM_FILE: ${SARCADE_SIEM_FILE:-}
     ports:
       - "8000:8000"
     volumes:
       - sarcade-tiles:/var/lib/sarcade/tiles
+      - sarcade-files:/var/lib/sarcade/files
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,3 +96,4 @@ volumes:
   sarcade-postgres:
   sarcade-valhalla:
   sarcade-tiles:
+  sarcade-files:

@@ -261,3 +261,57 @@ class CustomBasemapRow(Base):
     data: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_by: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class SecurityEventRow(Base):
+    """Security journal (note « Mises à jour et sécurité »): access, rights,
+    administration, updates, suspicious behaviour. Never the content of
+    messages, photos or positions. Each entry seals the previous one."""
+    __tablename__ = "security_events"
+    seq: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(64))
+    device_id: Mapped[str | None] = mapped_column(String(64))
+    event_id: Mapped[str | None] = mapped_column(String(64))
+    source_ip: Mapped[str | None] = mapped_column(String(64))
+    details: Mapped[dict] = mapped_column(JSON, nullable=False)
+    prev_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class ServerSettingRow(Base):
+    """Server-wide settings of the administration tool (maintenance windows,
+    journal retention, minimal client version) and small server state."""
+    __tablename__ = "server_settings"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ServerUpdateRow(Base):
+    """History of server updates reported by the updater."""
+    __tablename__ = "server_updates"
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    from_version: Mapped[str | None] = mapped_column(String(32))
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+
+
+class ClientDeviceRow(Base):
+    """Version of a client application, across events, for the minimal
+    version imposed by the server (invitation, then obligation 2 h later,
+    deferred to the end of an active event)."""
+    __tablename__ = "client_devices"
+    device_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    platform: Mapped[str | None] = mapped_column(String(32))
+    app_version: Mapped[str | None] = mapped_column(String(32))
+    invited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    invited_for: Mapped[str | None] = mapped_column(String(32))
+    deferred_logged: Mapped[bool] = mapped_column(default=False, nullable=False)
+    refused_logged: Mapped[bool] = mapped_column(default=False, nullable=False)
+    last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

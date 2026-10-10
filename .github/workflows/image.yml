@@ -1,0 +1,81 @@
+# Server image: built on every change of main, rebuilt every week even
+# without code change (fixes of the base system), scanned before
+# publication (a critical flaw blocks it), published on ghcr.io, signed
+# (Sigstore keyless, no key to keep) with its inventory of components (SBOM).
+name: Image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  schedule:
+    - cron: "23 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+env:
+  IMAGE: ghcr.io/stephanedubos78/sarcade-server
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Version
+        id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "tags=$IMAGE:${GITHUB_REF_NAME#v},$IMAGE:latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=" >> "$GITHUB_OUTPUT"
+            echo "tags=$IMAGE:edge,$IMAGE:sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build for the scan
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          pull: true
+          no-cache: ${{ github.event_name == 'schedule' }}
+          tags: sarcade-server:scan
+          build-args: SARCADE_VERSION=${{ steps.v.outputs.version }}
+      - name: Scan the image (a critical flaw blocks the publication)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: sarcade-server:scan
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.v.outputs.tags }}
+          build-args: SARCADE_VERSION=${{ steps.v.outputs.version }}
+      - name: Inventory of components (SBOM)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-release-assets: ${{ startsWith(github.ref, 'refs/tags/v') }}
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign the image and attest its SBOM
+        run: |
+          cosign sign --yes "$IMAGE@$DIGEST"
+          cosign attest --yes --type spdxjson --predicate sbom.spdx.json "$IMAGE@$DIGEST"
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import os
+import re
 from pathlib import Path
 import shutil
 import uuid
@@ -27,8 +28,17 @@ def tiles_root() -> Path:
     return Path(os.getenv("SARCADE_TILES_ROOT", "/var/lib/sarcade/tiles"))
 
 
+_SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+
 def package_path(basemap_id: str) -> Path:
-    return tiles_root() / f"{basemap_id}.mbtiles"
+    if not _SAFE_ID.match(basemap_id):
+        raise HTTPException(status_code=404, detail="basemap_not_found")
+    root = os.path.realpath(tiles_root())
+    path = os.path.realpath(os.path.join(root, f"{basemap_id}.mbtiles"))
+    if not path.startswith(root + os.sep):
+        raise HTTPException(status_code=404, detail="basemap_not_found")
+    return Path(path)
 
 
 def _known(db: Session) -> dict[str, dict]:
