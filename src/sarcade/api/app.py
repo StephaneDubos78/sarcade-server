@@ -27,6 +27,7 @@ from . import operations as event_ops
 from . import groups as groups_api
 from . import aprs as aprs_api
 from . import weather as weather_api
+from . import routes as routes_api
 from sarcade.weather import service as weather_service
 from sarcade.aprs import links as aprs_links
 from sarcade.aprs import service as aprs_service
@@ -49,6 +50,7 @@ app.include_router(event_ops.router)
 app.include_router(groups_api.router)
 app.include_router(aprs_api.router)
 app.include_router(weather_api.router)
+app.include_router(routes_api.router)
 
 
 @app.get("/health")
@@ -421,7 +423,18 @@ def _apply_map_feature(db: Session, op, now: datetime) -> tuple[str, int, dict |
 async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(get_db)):
     results = []
     broadcasts = []
+    notices: dict[str, routes_api.Notices] = {}
     for op in operations:
+        if op.object_type in ("route", "route_waypoint", "route_passage"):
+            batch = notices.setdefault(op.event_id, routes_api.Notices())
+            status, cursor, message = routes_api.apply_route_object(db, op, datetime.now(UTC), batch)
+            if message:
+                broadcasts.append((op.event_id, message))
+            results.append({
+                "operation_id": op.operation_id, "status": status,
+                "server_time": datetime.now(UTC), "sync_cursor": str(cursor) if cursor else None,
+            })
+            continue
         if op.object_type == "map_feature":
             status, cursor, message = _apply_map_feature(db, op, datetime.now(UTC))
             if message:
@@ -507,6 +520,9 @@ async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(g
             "operation_id": op.operation_id,"status": status,
             "server_time": datetime.now(UTC),"sync_cursor": str(cursor) if cursor else None,
         })
+    for event_id, batch in notices.items():
+        for payload in routes_api.flush_notices(db, event_id, batch, datetime.now(UTC)):
+            broadcasts.append((event_id, payload))
     db.commit()
     for event_id, payload in broadcasts:
         await manager.broadcast(event_id, payload)
