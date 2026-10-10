@@ -55,6 +55,9 @@ jobs:
       - name: Verify the weather (stub of Open-Meteo and vigilance)
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_weather.py"
+      - name: Verify routes with waypoints
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_routes.py"
       - name: Verify the embedded web client
         run: |
           curl -fsS http://localhost:8000/ -o index.html
