@@ -55,8 +55,10 @@ class PositionRow(Base):
     speed_mps: Mapped[float | None] = mapped_column(Float)
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     battery_pct: Mapped[int | None] = mapped_column(Integer)
-    # "device" (phone or PC), later "aprs".
+    # "device" (phone or PC) or "aprs".
     source: Mapped[str] = mapped_column(String(16), default="device", nullable=False)
+    # APRS only: "rf" (radio, Gateway) or "is" (APRS-IS, Internet).
+    aprs_via: Mapped[str | None] = mapped_column(String(8))
 
 
 class POIRow(Base):
@@ -194,6 +196,10 @@ class DeviceRow(Base):
     oldest_pending_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     tracking_enabled: Mapped[bool | None] = mapped_column()
     tracking_interval_s: Mapped[int | None] = mapped_column(Integer)
+    # Operator's callsign (APRS positions attach to this device) and consent
+    # to have positions transmitted on local radio (note « APRS »).
+    callsign: Mapped[str | None] = mapped_column(String(16), index=True)
+    aprs_tx_consent: Mapped[bool | None] = mapped_column()
     last_contact_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_position_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -210,3 +216,15 @@ class CommGroupRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class AprsGroupRow(Base):
+    """Group of radio amateur callsigns whose APRS positions are shown
+    (e.g. « ADRASEC 78 »). Created by the organisation administrator."""
+    __tablename__ = "aprs_groups"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    callsigns: Mapped[list] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(64), nullable=False)

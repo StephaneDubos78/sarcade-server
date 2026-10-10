@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -24,11 +25,26 @@ from sarcade.messages import attachments as msg_attachments
 from .deps import get_db
 from . import operations as event_ops
 from . import groups as groups_api
+from . import aprs as aprs_api
+from sarcade.aprs import links as aprs_links
+from sarcade.aprs import service as aprs_service
 from sarcade.groups import service as groups
 
-app = FastAPI(title="SARCADE Server", version="0.1.0-dev")
+_background_tasks: list = []
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    aprs_links.start(_background_tasks)
+    yield
+    for task in _background_tasks:
+        task.cancel()
+
+
+app = FastAPI(title="SARCADE Server", version="0.1.0-dev", lifespan=lifespan)
 app.include_router(event_ops.router)
 app.include_router(groups_api.router)
+app.include_router(aprs_api.router)
 
 
 @app.get("/health")
@@ -73,9 +89,11 @@ async def ingest_position(payload: PositionCreate, db: Session = Depends(get_db)
         accuracy_m=payload.accuracy_m, heading_deg=payload.heading_deg,
         speed_mps=payload.speed_mps, time=payload.time, battery_pct=payload.battery_pct, source="device")
     db.add(row)
-    event_ops.touch_device(db, payload.event_id, payload.device_id, datetime.now(UTC),
-                            position_time=payload.time, battery_pct=payload.battery_pct)
+    device = event_ops.touch_device(db, payload.event_id, payload.device_id, datetime.now(UTC),
+                                    position_time=payload.time, battery_pct=payload.battery_pct)
     db.commit(); db.refresh(row)
+    aprs_service.queue_transmission(db.get(EventRow, payload.event_id).settings, device,
+                                    payload.lat, payload.lon, datetime.now(UTC))
     data = position_dict(row)
     await manager.broadcast(payload.event_id, {"type": "position.updated", "data": data})
     return {"status": "accepted", "id": payload.id}
@@ -447,8 +465,11 @@ async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(g
                     battery_pct=event_ops.clean_battery(p.get("battery_pct")),source="device",
                 )
                 db.add(row); db.flush()
-                event_ops.touch_device(db, op.event_id, p["device_id"], datetime.now(UTC),
-                                        position_time=row.time, battery_pct=row.battery_pct)
+                device = event_ops.touch_device(db, op.event_id, p["device_id"], datetime.now(UTC),
+                                                position_time=row.time, battery_pct=row.battery_pct)
+                event = db.get(EventRow, op.event_id)
+                if event is not None:
+                    aprs_service.queue_transmission(event.settings, device, p["lat"], p["lon"], datetime.now(UTC))
                 broadcasts.append((op.event_id, {"type":"position.updated","data":p}))
             elif op.object_type == "poi" and db.get(POIRow, op.object_id) is None:
                 row = POIRow(
