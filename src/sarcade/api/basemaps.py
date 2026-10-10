@@ -34,11 +34,11 @@ _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 def package_path(basemap_id: str) -> Path:
     if not _SAFE_ID.match(basemap_id):
         raise HTTPException(status_code=404, detail="basemap_not_found")
-    root = tiles_root().resolve()
-    path = (root / f"{basemap_id}.mbtiles").resolve()
-    if path.parent != root:
+    root = os.path.realpath(tiles_root())
+    path = os.path.realpath(os.path.join(root, f"{basemap_id}.mbtiles"))
+    if not path.startswith(root + os.sep):
         raise HTTPException(status_code=404, detail="basemap_not_found")
-    return path
+    return Path(path)
 
 
 def _known(db: Session) -> dict[str, dict]:
