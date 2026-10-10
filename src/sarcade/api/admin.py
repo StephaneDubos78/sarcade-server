@@ -27,7 +27,9 @@ from .deps import get_db
 
 router = APIRouter(prefix="/api/v0.1")
 MAX_CLIENT_PACKAGE_BYTES = int(os.getenv("SARCADE_MAX_CLIENT_PACKAGE_BYTES", str(512 * 1024 ** 2)))
-EXTENSIONS = {"windows": "msix", "appimage": "AppImage", "apk": "apk"}
+# File names are constants: the platform given in the URL only selects one.
+CLIENT_FILES = {"windows": "sarcade-windows.msix", "appimage": "sarcade-appimage.AppImage",
+                "apk": "sarcade-apk.apk"}
 
 
 def client_ip(request: Request) -> str | None:
@@ -226,7 +228,8 @@ async def upload_client(platform: str, request: Request, version: str = Form(...
     """Signed client package (Windows, AppImage, APK) distributed by the
     local server on a network without Internet. The client checks the
     platform signature before installing it."""
-    if platform not in updates.CLIENT_PLATFORMS:
+    filename = CLIENT_FILES.get(platform)
+    if filename is None:
         raise HTTPException(status_code=404, detail="unknown_platform")
     if not policy.parse_version(version) or not policy._VERSION.match(version.strip()):
         raise HTTPException(status_code=422, detail="invalid_version")
@@ -244,25 +247,27 @@ async def upload_client(platform: str, request: Request, version: str = Form(...
                 out.write(chunk)
         if size == 0:
             raise HTTPException(status_code=422, detail="empty_package")
-        shutil.move(tmp, root / f"sarcade-{platform}.{EXTENSIONS[platform]}")
+        shutil.move(tmp, root / filename)
     finally:
         tmp.unlink(missing_ok=True)
     now = datetime.now(UTC)
     packages = dict(updates.get_value(db, "client_packages", {}) or {})
-    packages[platform] = {"version": version.strip(), "sha256": digest.hexdigest(), "size": size,
+    key = next(p for p in CLIENT_FILES if p == platform)
+    packages[key] = {"version": version.strip(), "sha256": digest.hexdigest(), "size": size,
                           "uploaded_at": journal.iso(now)}
     updates.set_value(db, "client_packages", packages, now)
     journal.record(db, "admin", "client_package_uploaded", source_ip=client_ip(request),
-                   details={"platform": platform, "version": version.strip(), "sha256": digest.hexdigest()})
+                   details={"platform": key, "version": version.strip(), "sha256": digest.hexdigest()})
     db.commit()
-    return updates.package_info(platform, packages[platform])
+    return updates.package_info(key, packages[key])
 
 
 @router.get("/clients/{platform}/package")
 def download_client(platform: str):
-    if platform not in updates.CLIENT_PLATFORMS:
+    filename = CLIENT_FILES.get(platform)
+    if filename is None:
         raise HTTPException(status_code=404, detail="unknown_platform")
-    path = clients_root() / f"sarcade-{platform}.{EXTENSIONS[platform]}"
+    path = clients_root() / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="no_client_package")
     return FileResponse(path, media_type="application/octet-stream", filename=path.name)
