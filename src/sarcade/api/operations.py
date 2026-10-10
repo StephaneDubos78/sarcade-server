@@ -175,6 +175,7 @@ async def heartbeat(event_id: str, device_id: str, payload: Heartbeat, db: Sessi
         "settings": settings, "tracking_interval_s": interval,
         "tracking_required": settings["tracking_required"] and event.ended_at is None,
         "client_update": client_update,
+        "organization": {"navigation": updates_service.admin_settings(db)["navigation"]},
     }
 
 
