@@ -28,3 +28,28 @@ Objet synchronisé `road_closure` (ligne et libellé, actif ou non), **créé et
 Objet synchronisé `itinerary` (appareil, équipe, destination, mode, tracé, longueur restante, heure d'arrivée estimée, statut). Le PCO le voit (`GET /events/{id}/itineraries`). Main courante : départ et arrivée.
 
 Vérification : `tests/test_navigation.py`, `demo/verify_navigation.py` (CI, avec `demo/services_stub.py` à la place de Valhalla).
+
+## Navigation on the device (level 3, variant B)
+Decision of 10 Oct 2026. The server builds a **compact road graph** from the
+same OSM extract as Valhalla (`SARCADE_OSM_PBF`, department + 10 km), at
+start and whenever the extract is newer (weekly refresh), and serves it:
+
+- `GET /api/v0.1/routing/graph/info`: availability, version, date, size,
+  SHA-256, bounding box, number of vertices and edges;
+- `GET /api/v0.1/routing/graph`: the package (ETag = SHA-256, `304` when the
+  app already has it).
+
+Format « SRG1 » (gzip, little-endian, see `src/sarcade/routing/graph.py`):
+vertices at junctions and ends of ways, edges with length, modes allowed in
+each direction (car, foot, off-road; one-way streets for vehicles), road
+class, name and intermediate points; the header carries the speeds per
+mode and class so that the app uses the same values as the server.
+Tracks are open to off-road and foot, not to cars; private roads are left
+out. `python -m sarcade.routing.graph extract.osm.pbf graph.srg.gz` builds it
+by hand.
+
+## Navigation app of the organisation (level 1)
+Administration setting `navigation`: `app` (`operator` by default,
+`organic_maps`, `osmand`, `apple_maps`, `google_maps`, `waze`) and
+`hide_tracking_apps` (hide Google Maps and Waze). Sent to the clients by
+`GET /api/v0.1/clients/config`, `/clients/check` and each heartbeat.

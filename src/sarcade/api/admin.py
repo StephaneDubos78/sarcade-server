@@ -207,8 +207,15 @@ def client_check(payload: ClientCheck, request: Request, db: Session = Depends(g
     """Asked by a client at start and before joining an event."""
     result = updates.evaluate_client(db, payload.device_id, payload.platform, payload.app_version,
                                      datetime.now(UTC), source_ip=client_ip(request))
+    result["organization"] = client_config(db)
     db.commit()
     return result
+
+
+@router.get("/clients/config")
+def client_config(db: Session = Depends(get_db)):
+    """Settings of the organisation the clients apply (navigation app)."""
+    return {"navigation": updates.admin_settings(db)["navigation"]}
 
 
 def clients_root() -> Path:

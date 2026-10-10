@@ -9,13 +9,15 @@ import os
 import uuid
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from sarcade.db.models import EventRow, RouteObjectRow
 from sarcade.db.session import SessionLocal
 from sarcade.realtime.manager import manager
+from sarcade.routing import graph as road_graph
 from sarcade.routing import valhalla
 from sarcade.sync.service import record_operation
 
@@ -163,6 +165,72 @@ async def legs_loop() -> None:
                 log.warning("legs not computed for %s: %s", event_id, exc)
 
 
+# --- Road graph for navigation on the device (level 3) ----------------------
+
+def osm_path() -> str:
+    return os.getenv("SARCADE_OSM_PBF", "/var/lib/sarcade/osm/sarcade-area.osm.pbf")
+
+
+def graph_path() -> str:
+    return os.getenv("SARCADE_ROUTING_GRAPH", "/var/lib/sarcade/routing/sarcade-graph.srg.gz")
+
+
+def graph_info() -> dict | None:
+    meta = graph_path() + ".json"
+    if not (os.path.isfile(graph_path()) and os.path.isfile(meta)):
+        return None
+    import json
+    with open(meta) as f:
+        return json.load(f)
+
+
+def graph_outdated() -> bool:
+    src, out = osm_path(), graph_path()
+    if not os.path.isfile(src):
+        return False
+    return not os.path.isfile(out) or os.path.getmtime(src) > os.path.getmtime(out)
+
+
+def rebuild_graph() -> dict | None:
+    if not graph_outdated():
+        return graph_info()
+    os.makedirs(os.path.dirname(graph_path()) or ".", exist_ok=True)
+    info = road_graph.build_package(osm_path(), graph_path())
+    log.info("road graph built: %s vertices, %s edges, %s bytes", info["vertices"], info["edges"], info["size"])
+    return info
+
+
+async def graph_loop() -> None:
+    """Builds the graph when the OSM extract is newer (weekly refresh)."""
+    while True:
+        try:
+            await asyncio.to_thread(rebuild_graph)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("road graph not built: %s", exc)
+        await asyncio.sleep(3600)
+
+
+@router.get("/routing/graph/info")
+def road_graph_info():
+    """Version of the road graph the apps download (Wi-Fi or local network)."""
+    info = graph_info()
+    return {"available": info is not None, **(info or {})}
+
+
+@router.get("/routing/graph")
+def road_graph_download(request: Request):
+    info = graph_info()
+    if info is None:
+        raise HTTPException(status_code=404, detail="no_road_graph")
+    etag = f'"{info["sha256"]}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    return FileResponse(graph_path(), media_type="application/octet-stream", filename="sarcade-graph.srg.gz",
+                        headers={"ETag": etag})
+
+
 def start(tasks: list) -> None:
     if os.getenv("SARCADE_VALHALLA_URL"):
         tasks.append(asyncio.create_task(legs_loop()))
+    if os.getenv("SARCADE_ROUTING_GRAPH_BUILD", "1") != "0":
+        tasks.append(asyncio.create_task(graph_loop()))

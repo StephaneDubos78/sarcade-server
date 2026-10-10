@@ -80,6 +80,9 @@ jobs:
       - name: Verify updates and security (journal, maintenance, client versions, SIEM)
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_security.py"
+      - name: Verify the road graph for navigation on the device and the navigation app setting
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_offline_routing.py"
       - name: Verify the embedded web client
         run: |
           curl -fsS http://localhost:8000/ -o index.html

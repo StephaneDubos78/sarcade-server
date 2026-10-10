@@ -21,6 +21,8 @@ dependencies = [
   "httpx>=0.27,<1",
   # Time zones of the maintenance windows, also on slim images.
   "tzdata>=2024.1",
+  # OpenStreetMap reading for the road graph of navigation on the device.
+  "osmium>=3.7,<5",
 ]
 
 [project.optional-dependencies]
