@@ -252,3 +252,12 @@ class RouteObjectRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class CustomBasemapRow(Base):
+    """Base map added by the administrator (Core, decision of 10 Oct 2026)."""
+    __tablename__ = "custom_basemaps"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(64), nullable=False)
