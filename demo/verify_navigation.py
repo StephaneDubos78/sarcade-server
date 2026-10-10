@@ -47,6 +47,12 @@ check(r.status_code == 200 and r.json()["geometry"][0] == pts[0] and r.json()["m
 first_length = r.json()["length_m"]
 check(c.post(f"{API}/routing", json={"points": [[30.0, 2.0], [30.1, 2.1]], "mode": "foot"}).status_code == 422,
       "no route: explicit answer")
+r = c.post(f"{API}/routing", json={"event_id": event, "points": pts, "mode": "car", "alternatives": 2}).json()
+alts = r.get("alternatives", [])
+check(len(alts) == 1 and alts[0]["geometry"][1] == [pts[0][0], pts[1][1]] and alts[0]["mode"] == "car",
+      "one distinct variant proposed, the near-identical one dropped")
+check("alternatives" not in c.post(f"{API}/routing", json={"points": pts, "mode": "car"}).json(),
+      "no variants unless asked")
 
 closure = {"id": str(uuid.uuid4()), "event_id": event, "label": "Pont inondé", "points": [[48.81, 2.11], [48.811, 2.112]],
            "created_by": "PCO", "updated_by": "PCO", "updated_at": iso(T0)}

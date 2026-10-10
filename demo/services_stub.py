@@ -71,7 +71,20 @@ def route(body):
                                     "time": km * 30, "begin_shape_index": 1},
                                    {"instruction": "Vous êtes arrivé.", "type": 4, "length": 0, "time": 0,
                                     "begin_shape_index": len(pts) - 1}]})
-    return 200, {"trip": {"legs": legs, "summary": {"length": total, "time": total * 60}}}
+    out = {"trip": {"legs": legs, "summary": {"length": total, "time": total * 60}}}
+    if body.get("alternates") and len(locs) == 2:
+        (la1, lo1), (la2, lo2) = locs
+        km = (abs(la2 - la1) * 111 + abs(lo2 - lo1) * 73) * 1.25
+        east_first = [(la1, lo1), (la1, lo2), (la2, lo2)]
+        alt = {"shape": polyline6(east_first), "summary": {"length": km, "time": km * 66},
+               "maneuvers": [{"instruction": "Partez vers l'est.", "type": 1, "length": km, "time": km * 66,
+                              "begin_shape_index": 0},
+                             {"instruction": "Vous êtes arrivé.", "type": 4, "length": 0, "time": 0,
+                              "begin_shape_index": 2}]}
+        # Second variant identical to the main itinerary: SARCADE must drop it.
+        out["alternates"] = [{"trip": {"legs": [alt], "summary": {"length": km, "time": km * 66}}},
+                             {"trip": {"legs": legs, "summary": {"length": total, "time": total * 60}}}]
+    return 200, out
 
 
 class Handler(BaseHTTPRequestHandler):
