@@ -13,7 +13,6 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from sarcade.db.models import AckRow, EventRow, LogbookRow, MapFeatureRow, MessageRow, POIRow, PositionRow, ReferenceSiteRow, SharedFileRow, SyncOperationRow, TeamRow
-from sarcade.db.session import SessionLocal
 from sarcade.realtime.manager import manager
 from .schemas import EventCreate, EventOut, POICreate, POIOut, PositionCreate, PositionOut, ReferenceSiteOut, SyncOperationIn, SyncResultOut, TeamCreate, TeamOut
 from .serializers import poi_dict, position_dict, reference_site_dict
@@ -22,15 +21,11 @@ from sarcade.sync.service import record_operation
 from sarcade.features import service as features
 from sarcade.messages import attachments as msg_attachments
 
+from .deps import get_db
+from . import operations as event_ops
+
 app = FastAPI(title="SARCADE Server", version="0.1.0-dev")
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+app.include_router(event_ops.router)
 
 
 @app.get("/health")
@@ -64,8 +59,11 @@ async def ingest_position(payload: PositionCreate, db: Session = Depends(get_db)
     row = PositionRow(id=payload.id, event_id=payload.event_id, device_id=payload.device_id,
         point=WKTElement(f"POINT({payload.lon} {payload.lat})", srid=4326), alt_m=payload.alt_m,
         accuracy_m=payload.accuracy_m, heading_deg=payload.heading_deg,
-        speed_mps=payload.speed_mps, time=payload.time)
-    db.add(row); db.commit(); db.refresh(row)
+        speed_mps=payload.speed_mps, time=payload.time, battery_pct=payload.battery_pct, source="device")
+    db.add(row)
+    event_ops.touch_device(db, payload.event_id, payload.device_id, datetime.now(UTC),
+                            position_time=payload.time, battery_pct=payload.battery_pct)
+    db.commit(); db.refresh(row)
     data = position_dict(row)
     await manager.broadcast(payload.event_id, {"type": "position.updated", "data": data})
     return {"status": "accepted", "id": payload.id}
@@ -420,8 +418,11 @@ async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(g
                     alt_m=p.get("alt_m"),accuracy_m=p.get("accuracy_m"),
                     heading_deg=p.get("heading_deg"),speed_mps=p.get("speed_mps"),
                     time=datetime.fromisoformat(p["time"].replace("Z","+00:00")),
+                    battery_pct=event_ops.clean_battery(p.get("battery_pct")),source="device",
                 )
                 db.add(row); db.flush()
+                event_ops.touch_device(db, op.event_id, p["device_id"], datetime.now(UTC),
+                                        position_time=row.time, battery_pct=row.battery_pct)
                 broadcasts.append((op.event_id, {"type":"position.updated","data":p}))
             elif op.object_type == "poi" and db.get(POIRow, op.object_id) is None:
                 row = POIRow(
