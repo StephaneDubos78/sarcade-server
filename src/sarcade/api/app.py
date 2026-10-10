@@ -23,9 +23,12 @@ from sarcade.messages import attachments as msg_attachments
 
 from .deps import get_db
 from . import operations as event_ops
+from . import groups as groups_api
+from sarcade.groups import service as groups
 
 app = FastAPI(title="SARCADE Server", version="0.1.0-dev")
 app.include_router(event_ops.router)
+app.include_router(groups_api.router)
 
 
 @app.get("/health")
@@ -35,9 +38,15 @@ def health():
 
 @app.post("/api/v0.1/events", response_model=EventOut, status_code=201)
 def create_event(payload: EventCreate, db: Session = Depends(get_db)):
+    now = datetime.now(UTC)
     row = EventRow(id=str(uuid.uuid4()), name=payload.name, kind=payload.kind, summary=payload.summary,
-                   status="draft", created_at=datetime.now(UTC), version=0)
-    db.add(row); db.commit(); db.refresh(row)
+                   status="draft", created_at=now, version=0)
+    db.add(row); db.flush()
+    # ADRASEC default groups, created when the event opens (10 Oct 2026).
+    groups_api.ensure_groups(db, row.id, groups.default_groups(row.id, now), now)
+    db.add(LogbookRow(event_id=row.id, kind="group", object_id=None, actor_id="PCO", time=now,
+                      summary="Groupes par défaut ADRASEC créés"))
+    db.commit(); db.refresh(row)
     return row
 
 
@@ -46,7 +55,10 @@ def create_team(event_id: str, payload: TeamCreate, db: Session = Depends(get_db
     if db.get(EventRow, event_id) is None:
         raise HTTPException(status_code=404, detail="event_not_found")
     row = TeamRow(id=str(uuid.uuid4()), event_id=event_id, name=payload.name)
-    db.add(row); db.commit(); db.refresh(row)
+    db.add(row); db.flush()
+    now = datetime.now(UTC)
+    groups_api.ensure_groups(db, event_id, [groups.team_group(event_id, row.id, row.name, now)], now)
+    db.commit(); db.refresh(row)
     return row
 
 
@@ -397,10 +409,24 @@ async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(g
                 "server_time": datetime.now(UTC), "sync_cursor": str(cursor) if cursor else None,
             })
             continue
+        if op.object_type == "comm_group":
+            status, cursor, message = groups_api.apply_group(db, op, datetime.now(UTC))
+            if message:
+                broadcasts.append((op.event_id, message))
+            results.append({
+                "operation_id": op.operation_id, "status": status,
+                "server_time": datetime.now(UTC), "sync_cursor": str(cursor) if cursor else None,
+            })
+            continue
         if op.object_type == "message" and op.action == "create":
             try:
                 op.payload["attachments"] = msg_attachments.clean_attachments(op.payload.get("attachments"))
             except ValueError:
+                results.append({"operation_id": op.operation_id, "status": "rejected",
+                                "server_time": datetime.now(UTC), "sync_cursor": None})
+                continue
+            if not groups_api.message_allowed(db, op.event_id, op.payload.get("sender_id", ""),
+                                              op.payload.get("recipient_ids")):
                 results.append({"operation_id": op.operation_id, "status": "rejected",
                                 "server_time": datetime.now(UTC), "sync_cursor": None})
                 continue

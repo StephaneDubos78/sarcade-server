@@ -196,3 +196,17 @@ class DeviceRow(Base):
     tracking_interval_s: Mapped[int | None] = mapped_column(Integer)
     last_contact_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_position_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CommGroupRow(Base):
+    """Communication group; ``data`` holds the canonical client fields."""
+    __tablename__ = "comm_groups"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
