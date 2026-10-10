@@ -1,10 +1,15 @@
-"""Stand-in for Open-Meteo, the Météo-France vigilance and Valhalla, for the
-demo stack and the CI (no Internet, no routing tiles). Serves plausible data."""
+"""Stand-in for Open-Meteo, the Météo-France vigilance, Valhalla, the GitHub
+releases API and a SIEM syslog collector (TCP, octet counting), for the demo
+stack and the CI (no Internet, no routing tiles). Serves plausible data."""
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
+import socketserver
+import threading
 from urllib.parse import urlparse
+
+SIEM_RECEIVED: list[str] = []
 
 
 def forecast(path):
@@ -92,6 +97,10 @@ class Handler(BaseHTTPRequestHandler):
             body = {"version": "stub"}
         elif path == "/vigilance" and self.headers.get("apikey"):
             body = VIGILANCE
+        elif path == "/releases/latest":
+            body = {"tag_name": "v9.9.0", "html_url": "https://example.invalid/releases/v9.9.0"}
+        elif path == "/siem/received":
+            body = list(SIEM_RECEIVED)
         else:
             self.send_response(404)
             self.end_headers()
@@ -107,5 +116,20 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+class SyslogHandler(socketserver.StreamRequestHandler):
+    """Syslog over TCP with octet counting framing (RFC 6587 / RFC 5425)."""
+    def handle(self):
+        while True:
+            length = b""
+            while (c := self.rfile.read(1)) and c != b" ":
+                length += c
+            if not c or not length.isdigit():
+                return
+            SIEM_RECEIVED.append(self.rfile.read(int(length)).decode())
+
+
 if __name__ == "__main__":
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
+    siem = socketserver.ThreadingTCPServer(("0.0.0.0", int(os.getenv("SIEM_PORT", "6514"))), SyslogHandler)
+    threading.Thread(target=siem.serve_forever, daemon=True).start()
     HTTPServer(("0.0.0.0", int(os.getenv("PORT", "8080"))), Handler).serve_forever()

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from sarcade.updates import service as updates_service
 from sarcade.aprs import callsigns as calls
 from sarcade.db.models import DeviceRow, EventRow, LogbookRow
 from sarcade.events import settings as event_settings
@@ -165,12 +166,15 @@ async def heartbeat(event_id: str, device_id: str, payload: Heartbeat, db: Sessi
     settings = event_settings.merged(event.settings)
     interval = event_settings.clamp_interval(payload.tracking_interval_s, settings)
     row.tracking_interval_s = interval
+    client_update = updates_service.evaluate_client(db, device_id, payload.platform, payload.app_version, now,
+                                                    in_active_event=event.ended_at is None)
     db.commit()
     await manager.broadcast(event_id, {"type": "device.updated", "data": device_dict(row, settings, now)})
     return {
         "server_time": now, "event_status": event.status, "ended_at": utc(event.ended_at),
         "settings": settings, "tracking_interval_s": interval,
         "tracking_required": settings["tracking_required"] and event.ended_at is None,
+        "client_update": client_update,
     }
 
 

@@ -30,6 +30,9 @@ from . import weather as weather_api
 from . import routes as routes_api
 from . import navigation as navigation_api
 from . import basemaps as basemaps_api
+from . import admin as admin_api
+from sarcade.security import journal as security_journal, siem, watch as security_watch
+from sarcade.updates import service as updates_service
 from sarcade.weather import service as weather_service
 from sarcade.aprs import links as aprs_links
 from sarcade.aprs import service as aprs_service
@@ -43,6 +46,8 @@ async def lifespan(_app):
     aprs_links.start(_background_tasks)
     weather_service.start(_background_tasks)
     navigation_api.start(_background_tasks)
+    updates_service.start(_background_tasks)
+    siem.start(_background_tasks)
     yield
     for task in _background_tasks:
         task.cancel()
@@ -56,6 +61,8 @@ app.include_router(weather_api.router)
 app.include_router(routes_api.router)
 app.include_router(navigation_api.router)
 app.include_router(basemaps_api.router)
+app.include_router(admin_api.router)
+app.middleware("http")(security_watch.middleware)
 
 
 @app.get("/health")
@@ -467,6 +474,11 @@ async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(g
                 continue
             if not groups_api.message_allowed(db, op.event_id, op.payload.get("sender_id", ""),
                                               op.payload.get("recipient_ids")):
+                security_journal.record(db, "rights", "write_refused", "refused",
+                                        actor=str(op.payload.get("sender_id", ""))[:64] or None,
+                                        event_id=op.event_id, details={"object_type": "message",
+                                        "reason": "listen_only_or_archived_group",
+                                        "recipients": op.payload.get("recipient_ids") or []})
                 results.append({"operation_id": op.operation_id, "status": "rejected",
                                 "server_time": datetime.now(UTC), "sync_cursor": None})
                 continue

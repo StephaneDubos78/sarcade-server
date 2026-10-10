@@ -20,6 +20,19 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest -q
 
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencies with known vulnerabilities (pip-audit)
+        run: |
+          pip install uv==0.11.32 pip-audit
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements.txt
+          pip-audit --require-hashes -r requirements.txt
+
   demo-integration:
     runs-on: ubuntu-latest
     steps:
@@ -64,6 +77,9 @@ jobs:
       - name: Verify base maps (catalog, custom layers, offline MBTiles packages)
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_basemaps.py"
+      - name: Verify updates and security (journal, maintenance, client versions, SIEM)
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_security.py"
       - name: Verify the embedded web client
         run: |
           curl -fsS http://localhost:8000/ -o index.html
