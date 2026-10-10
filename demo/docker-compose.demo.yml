@@ -35,6 +35,10 @@ services:
       SARCADE_SIEM_TLS: "0"
       # Road graph of navigation on the device, from a small sample network.
       SARCADE_OSM_PBF: /demo-osm/sample.osm
+      # HTTPS through the reverse proxy (profile https), option B local CA.
+      SARCADE_TLS_MODE: local-ca
+      SARCADE_PUBLIC_URL: https://sarcade.test
+      FORWARDED_ALLOW_IPS: "*"
     ports:
       - "8000:8000"
     volumes:
@@ -47,6 +51,21 @@ services:
       services-stub:
         condition: service_started
     restart: on-failure
+
+  # Reverse proxy HTTPS, option B (local certification authority), the
+  # only one that works without Internet nor DNS provider.
+  https:
+    profiles: ["https"]
+    build: ../docker/caddy
+    environment:
+      SARCADE_TLS_MODE: local-ca
+      SARCADE_DOMAIN: sarcade.test
+      SARCADE_TLS_NAMES: localhost
+    ports:
+      - "8081:80"
+      - "8443:443"
+    depends_on:
+      - server
 
   services-stub:
     image: python:3.12-slim

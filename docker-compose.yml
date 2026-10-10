@@ -58,8 +58,15 @@ services:
       SARCADE_SIEM_FORMAT: ${SARCADE_SIEM_FORMAT:-syslog}
       SARCADE_SIEM_TLS: ${SARCADE_SIEM_TLS:-1}
       SARCADE_SIEM_FILE: ${SARCADE_SIEM_FILE:-}
+      # HTTPS (docs/https-v0.1.md): mode and address announced to the
+      # clients, which switch to HTTPS by themselves.
+      SARCADE_TLS_MODE: ${SARCADE_TLS_MODE:-off}
+      SARCADE_PUBLIC_URL: ${SARCADE_PUBLIC_URL:-}
+      # Real address of the devices behind the reverse proxy (security journal).
+      FORWARDED_ALLOW_IPS: ${SARCADE_TRUSTED_PROXIES:-127.0.0.1}
     ports:
-      - "8000:8000"
+      # With HTTPS, SARCADE_HTTP_BIND=127.0.0.1 keeps plain HTTP for the machine only.
+      - "${SARCADE_HTTP_BIND:-0.0.0.0}:8000:8000"
     volumes:
       - sarcade-tiles:/var/lib/sarcade/tiles
       - sarcade-files:/var/lib/sarcade/files
@@ -68,6 +75,38 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # HTTPS (docker compose --profile https up -d), docs/https-v0.1.md:
+  # option A, Let's Encrypt certificate by DNS-01 challenge (default), or
+  # option B, local certification authority for installations never online.
+  https:
+    profiles: ["https"]
+    build: ./docker/caddy
+    image: sarcade-caddy:local
+    restart: unless-stopped
+    environment:
+      SARCADE_TLS_MODE: ${SARCADE_TLS_MODE:-acme-dns}
+      SARCADE_DOMAIN: ${SARCADE_DOMAIN:-}
+      SARCADE_TLS_NAMES: ${SARCADE_TLS_NAMES:-}
+      SARCADE_ACME_EMAIL: ${SARCADE_ACME_EMAIL:-}
+      SARCADE_DNS_PROVIDER: ${SARCADE_DNS_PROVIDER:-}
+      SARCADE_ACME_RESOLVERS: ${SARCADE_ACME_RESOLVERS:-1.1.1.1 9.9.9.9}
+      # DNS provider credentials, placed by the operator in .env.
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      OVH_ENDPOINT: ${OVH_ENDPOINT:-ovh-eu}
+      OVH_APPLICATION_KEY: ${OVH_APPLICATION_KEY:-}
+      OVH_APPLICATION_SECRET: ${OVH_APPLICATION_SECRET:-}
+      OVH_CONSUMER_KEY: ${OVH_CONSUMER_KEY:-}
+      GANDI_BEARER_TOKEN: ${GANDI_BEARER_TOKEN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - sarcade-caddy-data:/data
+      - sarcade-caddy-config:/config
+    depends_on:
+      - server
 
   # Navigation level 2 (docker compose --profile routing up -d):
   # OpenStreetMap extract of the ADRASEC department plus 10 km, then Valhalla.
@@ -104,3 +143,5 @@ volumes:
   sarcade-tiles:
   sarcade-files:
   sarcade-routing:
+  sarcade-caddy-data:
+  sarcade-caddy-config:
