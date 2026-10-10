@@ -1,5 +1,7 @@
 # Docker
 
-Ce répertoire accueillera les éléments spécifiques aux images SARCADE Server.
+Éléments propres à l'image SARCADE Server.
 
-Le déploiement local de développement sera piloté par le fichier Compose à la racine.
+- `fetch_web_client.py` : intègre le client Web à l'image pendant la construction (voir `docs/web-client-v0.1.md`).
+
+Le déploiement local de développement est piloté par le fichier Compose à la racine.
