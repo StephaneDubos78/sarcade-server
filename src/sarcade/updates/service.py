@@ -54,10 +54,12 @@ def admin_settings(db: Session) -> dict:
 def client_organization(db: Session) -> dict:
     """Settings of the organisation applied by the clients: navigation app
     and HTTPS address the clients switch to (docs/https-v0.1.md)."""
-    from sarcade import tls
+    from sarcade import licensing, tls
     t = tls.state()
     return {"navigation": admin_settings(db)["navigation"],
-            "https": {"url": t["https_url"], "root_certificate_url": t["root_certificate_url"]}}
+            "https": {"url": t["https_url"], "root_certificate_url": t["root_certificate_url"]},
+            # Applications are free: Pro features shown when the server says so.
+            "pro": licensing.client_view()}
 
 
 def merge_patch(current: dict, patch: dict) -> dict:

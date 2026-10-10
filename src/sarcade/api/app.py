@@ -32,6 +32,7 @@ from . import navigation as navigation_api
 from . import basemaps as basemaps_api
 from . import admin as admin_api
 from sarcade.security import journal as security_journal, siem, watch as security_watch
+from sarcade import licensing
 from sarcade.updates import service as updates_service
 from sarcade.weather import service as weather_service
 from sarcade.aprs import links as aprs_links
@@ -47,6 +48,7 @@ async def lifespan(_app):
     weather_service.start(_background_tasks)
     navigation_api.start(_background_tasks)
     updates_service.start(_background_tasks)
+    licensing.start(_background_tasks)
     siem.start(_background_tasks)
     yield
     for task in _background_tasks:
