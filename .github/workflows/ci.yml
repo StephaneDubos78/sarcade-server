@@ -37,6 +37,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Ephemeral test licence (SARCADE Pro, module siem)
+        run: |
+          pip install -q cryptography
+          echo "SARCADE_LICENCE_TEST_ROOT=$(python3 demo/make_test_licence.py demo/licence-test)" >> "$GITHUB_ENV"
       - name: Start SARCADE demo stack
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml up -d --build postgres services-stub server

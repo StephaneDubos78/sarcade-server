@@ -45,11 +45,13 @@ def test_octet_counting_frame():
     assert siem.frame("<14>1 é") == b"8 <14>1 \xc3\xa9"
 
 
-def test_siem_requires_the_pro_module(monkeypatch):
-    monkeypatch.setenv("SARCADE_PRO_MODULES", "locate")
+def test_siem_requires_the_pro_module(monkeypatch, tmp_path):
+    # Without licence, Core only; the environment switch of v0.1 is gone.
+    monkeypatch.setenv("SARCADE_LICENCE_FILE", str(tmp_path / "none.json"))
+    monkeypatch.setenv("SARCADE_PRO_MODULES", "siem")
+    licensing._state = None
     assert not licensing.pro_enabled("siem")
-    monkeypatch.setenv("SARCADE_PRO_MODULES", "siem, locate, unknown")
-    assert licensing.enabled_modules() == {"siem", "locate"}
+    licensing._state = None
 
 
 def test_versions():

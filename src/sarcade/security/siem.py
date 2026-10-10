@@ -75,7 +75,21 @@ async def _open(cfg: dict):
 async def forward_loop() -> None:
     cfg = config()
     writer = None
+    warned = False
     while True:
+        # Pro module « siem »: forwarding follows the licence, checked every
+        # day; entries wait in the journal while the module is not licensed.
+        state["enabled"] = licensing.pro_enabled("siem")
+        if not state["enabled"]:
+            if not warned:
+                log.warning("SIEM configured but the « siem » Pro module is not licensed: not forwarded")
+                warned = True
+            if writer is not None:
+                writer.close()
+                writer, state["connected"] = None, False
+            await asyncio.sleep(15)
+            continue
+        warned = False
         try:
             _, rows = await asyncio.to_thread(pending)
             if rows:
@@ -114,8 +128,4 @@ def start(tasks: list) -> None:
     cfg = config()
     if not (cfg["host"] or cfg["file"]):
         return
-    if not licensing.pro_enabled("siem"):
-        log.warning("SIEM configured but the « siem » Pro module is not enabled: not forwarded")
-        return
-    state["enabled"] = True
     tasks.append(asyncio.create_task(forward_loop()))

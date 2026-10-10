@@ -95,7 +95,8 @@ client checks the platform signature before installing).
 
 ## SIEM (SARCADE Pro, module « siem »)
 
-Enabled by `SARCADE_PRO_MODULES=siem` (signed licence later). Formats syslog
+Enabled by a signed SARCADE Pro licence with the `siem` module (docs/pro-licences-v0.1.md);
+forwarding follows the licence, checked every day. Formats syslog
 RFC 5424 (`SARCADE_SIEM_FORMAT=syslog`, facility « log audit ») or JSON
 (`json`). Transports:
 
