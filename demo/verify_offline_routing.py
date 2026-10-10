@@ -32,7 +32,9 @@ for _ in range(30):
     if info.get("available"):
         break
     time.sleep(1)
-check(info.get("available") and info["vertices"] == 5 and info["edges"] == 6, "road graph built from the OSM extract")
+if not info.get("available"):
+    print(f"::error title=road graph::not built: {info}")
+check(info.get("available") and info["vertices"] == 5 and info["edges"] == 6, f"road graph built from the OSM extract {info}")
 r = c.get(f"{API}/routing/graph")
 check(r.status_code == 200 and len(r.content) == info["size"], "road graph downloaded")
 data = gzip.decompress(r.content)

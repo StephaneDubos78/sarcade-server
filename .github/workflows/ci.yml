@@ -92,7 +92,11 @@ jobs:
       - name: Logs on failure
         if: failure()
         working-directory: demo
-        run: docker compose -f docker-compose.demo.yml logs
+        run: |
+          docker compose -f docker-compose.demo.yml logs
+          # Raw logs are not always reachable: server warnings and errors as annotations.
+          docker compose -f docker-compose.demo.yml logs server 2>&1 | grep -iE "warning|error|traceback|exception" \
+            | tail -40 | sed 's/%/%25/g' | while IFS= read -r line; do echo "::error title=server::${line}"; done || true
       - name: Stop stack
         if: always()
         working-directory: demo
