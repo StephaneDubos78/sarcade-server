@@ -74,7 +74,7 @@ Server without Internet: `docker/updater.sh --offline sarcade-server-X.Y.Z.tar`
 
 **Active event**: not closed, with a device contact (or its creation) in the
 last 24 hours. An event left open and forgotten does not block the updates
-forever. *Proposal to validate.*
+forever (decision of the owner, 10 Oct 2026).
 
 ## Minimal client version
 
