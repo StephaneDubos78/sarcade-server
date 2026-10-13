@@ -481,3 +481,9 @@ def list_messages(event_id: str, limit: int = Query(200, ge=1, le=2000), db: Ses
 def list_logbook(event_id: str, after: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=2000), db: Session = Depends(get_db)):
     rows = db.scalars(select(LogbookRow).where(LogbookRow.event_id == event_id,LogbookRow.seq > after).order_by(LogbookRow.seq).limit(limit)).all()
     return [{"seq":r.seq,"kind":r.kind,"object_id":r.object_id,"actor_id":r.actor_id,"summary":r.summary,"time":r.time} for r in rows]
+
+
+# Keep last: the web client is mounted at "/" and must not shadow API routes.
+from .web_client import mount_web_client  # noqa: E402
+
+mount_web_client(app, os.getenv("SARCADE_WEB_ROOT"))
