@@ -2,7 +2,7 @@ from datetime import datetime
 import uuid
 
 from geoalchemy2 import Geography
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
@@ -29,6 +29,9 @@ class EventRow(Base):
     summary: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Operational settings set by the PCO (sarcade.events.settings).
+    settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class TeamRow(Base):
@@ -51,6 +54,9 @@ class PositionRow(Base):
     heading_deg: Mapped[float | None] = mapped_column(Float)
     speed_mps: Mapped[float | None] = mapped_column(Float)
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    battery_pct: Mapped[int | None] = mapped_column(Integer)
+    # "device" (phone or PC), later "aprs".
+    source: Mapped[str] = mapped_column(String(16), default="device", nullable=False)
 
 
 class POIRow(Base):
@@ -64,7 +70,6 @@ class POIRow(Base):
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
-from sqlalchemy import BigInteger, JSON, UniqueConstraint
 
 class SyncOperationRow(Base):
     __tablename__ = "sync_operations"
@@ -173,3 +178,21 @@ class MapFeatureRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class DeviceRow(Base):
+    """Last contact of a device in an event: feeds the PCO view of devices
+    that no longer report (« vue du dernier contact »)."""
+    __tablename__ = "devices"
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), primary_key=True)
+    device_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label: Mapped[str | None] = mapped_column(String(120))
+    platform: Mapped[str | None] = mapped_column(String(32))
+    app_version: Mapped[str | None] = mapped_column(String(32))
+    battery_pct: Mapped[int | None] = mapped_column(Integer)
+    pending_count: Mapped[int | None] = mapped_column(Integer)
+    oldest_pending_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tracking_enabled: Mapped[bool | None] = mapped_column()
+    tracking_interval_s: Mapped[int | None] = mapped_column(Integer)
+    last_contact_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_position_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
