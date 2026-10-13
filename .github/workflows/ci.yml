@@ -37,6 +37,9 @@ jobs:
       - name: Verify synchronization and logbook
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify.py"
+      - name: Verify map feature synchronisation (ADR-001)
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_map_features.py"
       - name: Logs on failure
         if: failure()
         working-directory: demo

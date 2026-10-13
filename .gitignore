@@ -31,3 +31,4 @@ certs/
 
 # Docker
 docker-compose.override.yml
+*.egg-info/
