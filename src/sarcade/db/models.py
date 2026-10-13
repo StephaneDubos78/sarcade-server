@@ -88,6 +88,7 @@ class MessageRow(Base):
     recipient_ids: Mapped[list] = mapped_column(JSON, nullable=False)
     priority: Mapped[str] = mapped_column(String(16), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    attachments: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 class AckRow(Base):
