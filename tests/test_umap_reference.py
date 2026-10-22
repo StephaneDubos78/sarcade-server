@@ -63,3 +63,24 @@ def test_ignores_linestrings_in_reference_layers():
         }]
     }
     assert parse_umap_reference_sites(document) == []
+
+
+def test_renamed_points_hauts_layer_keeps_identifiers():
+    """Export of 23 Oct 2026: the « PH » layer is now named « Points hauts »
+    (nested in a parent of the same name) and carries a « reference »."""
+    feature = {
+        "id": "ph56",
+        "geometry": {"type": "Point", "coordinates": [1.9, 48.75]},
+        "properties": {"reference": "PH 56", "nom": "Butte à l'Âne", "altitude_m": 186,
+                       "date_verif": "2026-10-04", "degagement": "", "acces": ""},
+    }
+
+    def doc(name):
+        return {"layers": [{"properties": {"name": "Points hauts"},
+                            "layers": [{"properties": {"name": name}, "features": [feature]}]}]}
+
+    new = parse_umap_reference_sites(doc("Points hauts"))
+    old = parse_umap_reference_sites(doc("PH"))
+    assert len(new) == 1 and new[0]["category"] == "HIGH_POINT"
+    assert new[0]["callsign"] == "PH 56" and new[0]["alt_m"] == 186
+    assert new[0]["id"] == old[0]["id"]

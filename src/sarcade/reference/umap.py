@@ -8,6 +8,8 @@ from typing import Any
 
 REFERENCE_LAYERS = {
     "PH": "HIGH_POINT",
+    # Layer renamed in the ADRASEC78 map (export of 23 Oct 2026).
+    "Points hauts": "HIGH_POINT",
     "Infra 78": "RELAY",
     "Infra externe": "RELAY",
     "Relais / Transpondeurs OM": "RELAY",
@@ -52,7 +54,13 @@ def _relay_subtype(props: dict[str, Any]) -> str:
     return "fixed_radio"
 
 
+# Former names of a layer: identifiers stay the same when a layer is renamed,
+# so a new import updates the sites instead of duplicating them.
+LAYER_ID_ALIASES = {"Points hauts": "PH"}
+
+
 def _stable_id(source: str, layer: str, source_object_id: str) -> str:
+    layer = LAYER_ID_ALIASES.get(layer, layer)
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source}:{layer}:{source_object_id}"))
 
 
@@ -106,7 +114,8 @@ def parse_umap_reference_sites(
                         "category": category,
                         "subtype": str(props.get("type") or "Point haut").strip(),
                         "name": name,
-                        "callsign": None,
+                        # « PH 56 »: reference of the high point in the ADRASEC78 map.
+                        "callsign": (str(props["reference"]).strip() or None) if props.get("reference") else None,
                         "lat": lat,
                         "lon": lon,
                         "alt_m": _to_float(props.get("altitude_m")),
