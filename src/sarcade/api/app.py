@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import uuid
@@ -9,7 +10,9 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFi
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 from geoalchemy2.elements import WKTElement
+from pydantic import ValidationError
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from sarcade.db.models import AckRow, EventRow, LogbookRow, MapFeatureRow, MessageRow, POIRow, PositionRow, ReferenceSiteRow, SharedFileRow, SyncOperationRow, TeamRow
@@ -17,12 +20,14 @@ from sarcade.realtime.manager import manager
 from .schemas import EventCreate, EventOut, POICreate, POIOut, PositionCreate, PositionOut, ReferenceSiteOut, SyncOperationIn, SyncResultOut, TeamCreate, TeamOut
 from .serializers import poi_dict, position_dict, reference_site_dict
 from sarcade.reference.umap import REFERENCE_LAYERS, parse_umap_reference_sites
-from sarcade.sync.service import record_operation
+from sarcade.sync.service import VALID_TYPES, record_operation
 from sarcade.features import service as features
 from sarcade.messages import attachments as msg_attachments
 
 from .deps import get_db
 from . import operations as event_ops
+
+log = logging.getLogger("sarcade.sync")
 
 app = FastAPI(title="SARCADE Server", version="0.1.0-dev")
 app.include_router(event_ops.router)
@@ -267,7 +272,7 @@ async def upload_file(event_id:str,sender_id:str=Form(...),file:UploadFile=File(
                       file_id:str|None=Form(None),mime_type:str|None=Form(None),db:Session=Depends(get_db)):
     """[file_id], chosen by the client, makes the upload idempotent: an upload
     retried after a network loss returns the stored file instead of a copy."""
-    if db.get(EventRow,event_id) is None: raise HTTPException(status_code=404,detail="event_not_found")
+    if db.get(EventRow,event_id) is None: raise HTTPException(status_code=404,detail="unknown_event")
     if file_id is not None and not msg_attachments.valid_file_id(file_id):
         raise HTTPException(status_code=422,detail="invalid_file_id")
     data=await file.read(MAX_FILE_BYTES+1)
@@ -383,79 +388,140 @@ def _apply_map_feature(db: Session, op, now: datetime) -> tuple[str, int, dict |
     return "accepted", cursor, {"type": kind, "data": result}
 
 
+def _iso(value) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("invalid_time")
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+class SyncRejected(Exception):
+    """The operation can never be applied: the client sets it aside."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _apply_operation(db: Session, op: SyncOperationIn, now: datetime) -> tuple[str, int, dict | None]:
+    """Applies one synchronised operation. Raises SyncRejected (or a data
+    error) when it cannot be applied; the caller isolates it in a savepoint."""
+    if op.object_type == "map_feature":
+        return _apply_map_feature(db, op, now)
+    if op.object_type not in VALID_TYPES:
+        raise SyncRejected(f"type d'élément inconnu : {op.object_type}")
+    if op.object_type == "message" and op.action == "create":
+        try:
+            op.payload["attachments"] = msg_attachments.clean_attachments(op.payload.get("attachments"))
+        except ValueError:
+            raise SyncRejected("pièces jointes invalides")
+    p = op.payload
+    if op.object_type == "ack" and op.action == "create" and db.get(AckRow, op.object_id) is None:
+        if db.get(MessageRow, p.get("message_id")) is None:
+            raise SyncRejected("accusé de réception d'un message inconnu de ce serveur")
+    status, cursor = record_operation(
+        db, event_id=op.event_id, operation_id=op.operation_id,
+        object_id=op.object_id, object_type=op.object_type,
+        action=op.action, payload=op.payload, client_time=op.client_time,
+    )
+    if status != "accepted" or op.action != "create":
+        return status, cursor, None
+    if op.object_type == "position" and db.get(PositionRow, op.object_id) is None:
+        row = PositionRow(
+            id=op.object_id, event_id=op.event_id, device_id=p["device_id"],
+            point=WKTElement(f'POINT({float(p["lon"])} {float(p["lat"])})', srid=4326),
+            alt_m=p.get("alt_m"), accuracy_m=p.get("accuracy_m"),
+            heading_deg=p.get("heading_deg"), speed_mps=p.get("speed_mps"),
+            time=_iso(p["time"]),
+            battery_pct=event_ops.clean_battery(p.get("battery_pct")), source="device",
+        )
+        db.add(row); db.flush()
+        event_ops.touch_device(db, op.event_id, p["device_id"], now,
+                                position_time=row.time, battery_pct=row.battery_pct)
+        return status, cursor, {"type": "position.updated", "data": p}
+    if op.object_type == "poi" and db.get(POIRow, op.object_id) is None:
+        row = POIRow(
+            id=op.object_id, event_id=op.event_id, kind=p["kind"], label=p.get("label"),
+            point=WKTElement(f'POINT({float(p["lon"])} {float(p["lat"])})', srid=4326),
+            created_at=_iso(p["created_at"]), version=0,
+        )
+        db.add(row); db.flush()
+        return status, cursor, {"type": "poi.created", "data": p}
+    if op.object_type == "message" and db.get(MessageRow, op.object_id) is None:
+        row = MessageRow(id=op.object_id, event_id=op.event_id, sender_id=p["sender_id"],
+            recipient_ids=p.get("recipient_ids", []), priority=p.get("priority", "routine"),
+            body=p["body"], attachments=p["attachments"] or None,
+            created_at=_iso(p["created_at"]))
+        db.add(row); db.flush()
+        db.add(LogbookRow(event_id=op.event_id, kind="message", object_id=row.id,
+            actor_id=row.sender_id, summary=msg_attachments.logbook_summary(row.body, p["attachments"]),
+            time=row.created_at))
+        db.flush()
+        return status, cursor, {"type": "message.created", "data": p}
+    if op.object_type == "ack" and db.get(AckRow, op.object_id) is None:
+        row = AckRow(id=op.object_id, event_id=op.event_id, message_id=p["message_id"],
+            actor_id=p["actor_id"], status=p["status"], time=_iso(p["time"]))
+        db.add(row); db.flush()
+        db.add(LogbookRow(event_id=op.event_id, kind="ack", object_id=row.id,
+            actor_id=row.actor_id, summary=f'{row.status}: {row.message_id}', time=row.time))
+        db.flush()
+        return status, cursor, {"type": "ack.created", "data": p}
+    return status, cursor, None
+
+
+_MAP_FEATURE_REASONS = {"rejected": "objet cartographique invalide"}
+
+
+def _sync_result(operation_id: str, status: str, cursor: int = 0, reason: str | None = None) -> dict:
+    return {"operation_id": operation_id, "status": status, "server_time": datetime.now(UTC),
+            "sync_cursor": str(cursor) if cursor else None, "reason": reason}
+
+
 @app.post("/api/v0.1/sync", response_model=list[SyncResultOut])
-async def synchronize(operations: list[SyncOperationIn], db: Session = Depends(get_db)):
+async def synchronize(operations: list[dict], db: Session = Depends(get_db)):
+    """Applies a batch of offline operations, each one on its own (« Robustesse
+    de la synchronisation »): an operation that fails is undone alone, in its
+    savepoint, and gets its own status; it never blocks the others.
+
+    Statuses: accepted, duplicate, conflict (applied elsewhere, nothing to
+    do), rejected (can never be applied, set aside by the client),
+    unknown_event (the event does not exist on this server, kept by the
+    client) and retry (transient server error, sent again later).
+    """
     results = []
     broadcasts = []
-    for op in operations:
-        if op.object_type == "map_feature":
-            status, cursor, message = _apply_map_feature(db, op, datetime.now(UTC))
-            if message:
-                broadcasts.append((op.event_id, message))
-            results.append({
-                "operation_id": op.operation_id, "status": status,
-                "server_time": datetime.now(UTC), "sync_cursor": str(cursor) if cursor else None,
-            })
+    known_events: dict[str, bool] = {}
+    for raw in operations:
+        operation_id = str(raw.get("operation_id") or "")[:64] if isinstance(raw, dict) else ""
+        try:
+            op = SyncOperationIn.model_validate(raw)
+        except ValidationError:
+            results.append(_sync_result(operation_id, "rejected", reason="élément mal formé"))
             continue
-        if op.object_type == "message" and op.action == "create":
-            try:
-                op.payload["attachments"] = msg_attachments.clean_attachments(op.payload.get("attachments"))
-            except ValueError:
-                results.append({"operation_id": op.operation_id, "status": "rejected",
-                                "server_time": datetime.now(UTC), "sync_cursor": None})
-                continue
-        status, cursor = record_operation(
-            db, event_id=op.event_id, operation_id=op.operation_id,
-            object_id=op.object_id, object_type=op.object_type,
-            action=op.action, payload=op.payload, client_time=op.client_time,
-        )
-        if status == "accepted" and op.action == "create":
-            p = op.payload
-            if op.object_type == "position" and db.get(PositionRow, op.object_id) is None:
-                row = PositionRow(
-                    id=op.object_id,event_id=op.event_id,device_id=p["device_id"],
-                    point=WKTElement(f'POINT({p["lon"]} {p["lat"]})', srid=4326),
-                    alt_m=p.get("alt_m"),accuracy_m=p.get("accuracy_m"),
-                    heading_deg=p.get("heading_deg"),speed_mps=p.get("speed_mps"),
-                    time=datetime.fromisoformat(p["time"].replace("Z","+00:00")),
-                    battery_pct=event_ops.clean_battery(p.get("battery_pct")),source="device",
-                )
-                db.add(row); db.flush()
-                event_ops.touch_device(db, op.event_id, p["device_id"], datetime.now(UTC),
-                                        position_time=row.time, battery_pct=row.battery_pct)
-                broadcasts.append((op.event_id, {"type":"position.updated","data":p}))
-            elif op.object_type == "poi" and db.get(POIRow, op.object_id) is None:
-                row = POIRow(
-                    id=op.object_id,event_id=op.event_id,kind=p["kind"],label=p.get("label"),
-                    point=WKTElement(f'POINT({p["lon"]} {p["lat"]})', srid=4326),
-                    created_at=datetime.fromisoformat(p["created_at"].replace("Z","+00:00")),version=0,
-                )
-                db.add(row); db.flush()
-                broadcasts.append((op.event_id, {"type":"poi.created","data":p}))
-            elif op.object_type == "message" and db.get(MessageRow, op.object_id) is None:
-                row = MessageRow(id=op.object_id,event_id=op.event_id,sender_id=p["sender_id"],
-                    recipient_ids=p.get("recipient_ids",[]),priority=p.get("priority","routine"),
-                    body=p["body"],attachments=p["attachments"] or None,
-                    created_at=datetime.fromisoformat(p["created_at"].replace("Z","+00:00")))
-                db.add(row); db.flush()
-                db.add(LogbookRow(event_id=op.event_id,kind="message",object_id=row.id,
-                    actor_id=row.sender_id,summary=msg_attachments.logbook_summary(row.body,p["attachments"]),time=row.created_at))
-                broadcasts.append((op.event_id, {"type":"message.created","data":p}))
-            elif op.object_type == "ack" and db.get(AckRow, op.object_id) is None:
-                if db.get(MessageRow, p["message_id"]) is None:
-                    status = "rejected"
-                else:
-                    row = AckRow(id=op.object_id,event_id=op.event_id,message_id=p["message_id"],
-                        actor_id=p["actor_id"],status=p["status"],
-                        time=datetime.fromisoformat(p["time"].replace("Z","+00:00")))
-                    db.add(row); db.flush()
-                    db.add(LogbookRow(event_id=op.event_id,kind="ack",object_id=row.id,
-                        actor_id=row.actor_id,summary=f'{row.status}: {row.message_id}',time=row.time))
-                    broadcasts.append((op.event_id, {"type":"ack.created","data":p}))
-        results.append({
-            "operation_id": op.operation_id,"status": status,
-            "server_time": datetime.now(UTC),"sync_cursor": str(cursor) if cursor else None,
-        })
+        if op.event_id not in known_events:
+            known_events[op.event_id] = db.get(EventRow, op.event_id) is not None
+        if not known_events[op.event_id]:
+            results.append(_sync_result(op.operation_id, "unknown_event",
+                                        reason=f"événement {op.event_id} inconnu de ce serveur"))
+            continue
+        now = datetime.now(UTC)
+        try:
+            with db.begin_nested():
+                status, cursor, message = _apply_operation(db, op, now)
+        except SyncRejected as exc:
+            results.append(_sync_result(op.operation_id, "rejected", reason=exc.reason))
+            continue
+        except (KeyError, TypeError, ValueError, IntegrityError, DataError) as exc:
+            log.warning("sync operation %s rejected: %r", op.operation_id, exc)
+            results.append(_sync_result(op.operation_id, "rejected", reason="données invalides"))
+            continue
+        except SQLAlchemyError:
+            log.exception("sync operation %s failed", op.operation_id)
+            results.append(_sync_result(op.operation_id, "retry", reason="erreur passagère du serveur"))
+            continue
+        if message:
+            broadcasts.append((op.event_id, message))
+        reason = _MAP_FEATURE_REASONS.get(status) if op.object_type == "map_feature" else None
+        results.append(_sync_result(op.operation_id, status, cursor, reason))
     db.commit()
     for event_id, payload in broadcasts:
         await manager.broadcast(event_id, payload)

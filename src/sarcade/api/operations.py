@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -92,6 +92,29 @@ def _event_or_404(db: Session, event_id: str) -> EventRow:
     if row is None:
         raise HTTPException(status_code=404, detail="event_not_found")
     return row
+
+
+def event_summary(row: EventRow) -> dict:
+    """What a client needs to offer the event in a list (« Choix de
+    l'événement dans une liste »)."""
+    closed = row.ended_at is not None or row.status == "closed"
+    return {
+        "id": row.id, "name": row.name, "kind": row.kind,
+        "status": "closed" if closed else row.status,
+        "created_at": utc(row.created_at), "ended_at": utc(row.ended_at),
+    }
+
+
+@router.get("/events")
+def list_events(include_closed: bool = Query(False), limit: int = Query(200, ge=1, le=1000),
+                db: Session = Depends(get_db)):
+    """Events of this server, newest first; closed events are hidden unless
+    asked for. Read rights will follow ADR-002 once identity is in place."""
+    stmt = select(EventRow)
+    if not include_closed:
+        stmt = stmt.where(EventRow.ended_at.is_(None), EventRow.status != "closed")
+    rows = db.scalars(stmt.order_by(EventRow.created_at.desc()).limit(limit)).all()
+    return [event_summary(r) for r in rows]
 
 
 @router.get("/events/{event_id}")
