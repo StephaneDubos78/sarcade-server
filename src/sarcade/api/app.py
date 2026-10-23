@@ -26,11 +26,13 @@ from sarcade.messages import attachments as msg_attachments
 
 from .deps import get_db
 from . import operations as event_ops
+from . import access as access_api
 
 log = logging.getLogger("sarcade.sync")
 
 app = FastAPI(title="SARCADE Server", version="0.1.0-dev")
 app.include_router(event_ops.router)
+app.include_router(access_api.router)
 
 
 @app.get("/health")
