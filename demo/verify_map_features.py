@@ -95,7 +95,7 @@ check(sync(later) == ["accepted"], "correct device still wins afterwards")
 bad = op("create", feature(T0, kind="zone", points=[[48.7, 2.0]]), opid=str(uuid.uuid4()))
 check(sync(bad) == ["rejected"], "invalid geometry rejected")
 other = dict(op("create", feature(T0)), event_id="unknown-event")
-check(sync(other) == ["rejected"], "unknown event rejected")
+check(sync(other) == ["unknown_event"], "unknown event reported as unknown_event")
 
 gj = c.get(f"{BASE}/api/v0.1/events/{event}/map-features.geojson")
 gj.raise_for_status()
