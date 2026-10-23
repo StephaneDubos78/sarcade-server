@@ -37,10 +37,11 @@ class PositionCreate(BaseModel):
     heading_deg: float | None = Field(default=None, ge=0, lt=360)
     speed_mps: float | None = Field(default=None, ge=0)
     time: datetime
+    battery_pct: int | None = Field(default=None, ge=0, le=100)
 
 
 class PositionOut(PositionCreate):
-    pass
+    source: str = "device"
 
 
 class POICreate(BaseModel):
@@ -72,6 +73,8 @@ class SyncResultOut(BaseModel):
     status: str
     server_time: datetime
     sync_cursor: str | None = None
+    # Readable reason when the operation is not accepted.
+    reason: str | None = None
 
 
 class ReferenceSiteOut(BaseModel):
