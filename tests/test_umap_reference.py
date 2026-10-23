@@ -84,3 +84,11 @@ def test_renamed_points_hauts_layer_keeps_identifiers():
     assert len(new) == 1 and new[0]["category"] == "HIGH_POINT"
     assert new[0]["callsign"] == "PH 56" and new[0]["alt_m"] == 186
     assert new[0]["id"] == old[0]["id"]
+
+
+def test_simplex_frequency_used_in_and_out():
+    document = {"layers": [{"properties": {"name": "Infra externe"}, "features": [{
+        "id": "vara", "geometry": {"type": "Point", "coordinates": [2.6, 48.5]},
+        "properties": {"name": "Digi-Vara F5ZYI-7", "qrg_entree": "145.275", "mode": "VARA FM"}}]}]}
+    relay = parse_umap_reference_sites(document)[0]
+    assert relay["rx_mhz"] == relay["tx_mhz"] == 145.275
