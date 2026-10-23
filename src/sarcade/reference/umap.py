@@ -148,8 +148,10 @@ def parse_umap_reference_sites(
                         "access": props.get("acces"),
                         "clearance": props.get("degagement"),
                         "mode": props.get("mode"),
-                        "rx_mhz": _to_float(props.get("qrg_entree")),
-                        "tx_mhz": _to_float(props.get("qrg_sortie")),
+                        # Simplex (one frequency only, e.g. Digi-Vara F5ZYI-7):
+                        # the same frequency in and out (decision of 23 Oct 2026).
+                        "rx_mhz": _to_float(props.get("qrg_entree")) or _to_float(props.get("qrg_sortie")),
+                        "tx_mhz": _to_float(props.get("qrg_sortie")) or _to_float(props.get("qrg_entree")),
                         "ctcss_rx": props.get("ctcss_entree") or ctcss_common,
                         "ctcss_tx": props.get("ctcss_sortie") or ctcss_common,
                         "offset": props.get("offset"),
