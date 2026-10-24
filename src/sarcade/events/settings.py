@@ -28,10 +28,16 @@ DEFAULT_SETTINGS: dict = {
     "aprs_groups": [],
     "aprs_callsigns": [],
     "aprs_tx_rf": False,
+    # Weather (note « Prévisions météo »): forecast point of the event and
+    # department for the Météo-France vigilance.
+    "weather_lat": None,
+    "weather_lon": None,
+    "department": None,
 }
 
 _BOOL_KEYS = {"low_bandwidth", "tracking_required", "aprs_tx_rf"}
 _LIST_KEYS = {"aprs_groups", "aprs_callsigns"}
+_COORD_KEYS = {"weather_lat": 90, "weather_lon": 180}
 _INT_RANGES = {
     "low_bandwidth_interval_s": (15, 3600),
     "sync_alert_minutes": (1, 120),
@@ -63,6 +69,16 @@ def apply_patch(stored: dict | None, patch: dict) -> dict:
                 raise InvalidSettings(f"invalid_value:{key}")
         elif key in _LIST_KEYS:
             value = _clean_list(key, value)
+        elif key in _COORD_KEYS:
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                      or not -_COORD_KEYS[key] <= value <= _COORD_KEYS[key]):
+                raise InvalidSettings(f"invalid_value:{key}")
+            value = float(value) if value is not None else None
+        elif key == "department":
+            if value is not None and not (isinstance(value, str) and 2 <= len(value.strip()) <= 3
+                                          and value.strip().isalnum()):
+                raise InvalidSettings("invalid_value:department")
+            value = value.strip().upper() if value else None
         elif key in _INTERVAL_KEYS:
             if isinstance(value, bool) or value not in TRACKING_INTERVALS:
                 raise InvalidSettings(f"invalid_value:{key}")
@@ -127,6 +143,11 @@ def logbook_summaries(old: dict | None, new: dict) -> list[str]:
     if before["aprs_tx_rf"] != after["aprs_tx_rf"]:
         lines.append("APRS : émission radio locale des positions activée par le PCO" if after["aprs_tx_rf"]
                      else "APRS : émission radio locale des positions arrêtée")
+    if (before["weather_lat"], before["weather_lon"]) != (after["weather_lat"], after["weather_lon"]):
+        if after["weather_lat"] is not None and after["weather_lon"] is not None:
+            lines.append(f"Météo : point de prévision {after['weather_lat']:.4f}, {after['weather_lon']:.4f}")
+    if before["department"] != after["department"] and after["department"]:
+        lines.append(f"Météo : vigilance suivie pour le département {after['department']}")
     if before["sync_alert_minutes"] != after["sync_alert_minutes"]:
         lines.append(f"Alerte de synchronisation après {after['sync_alert_minutes']} min")
     return lines
