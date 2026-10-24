@@ -33,6 +33,8 @@ DEFAULT_SETTINGS: dict = {
     "weather_lat": None,
     "weather_lon": None,
     "department": None,
+    # Base map shown by default for the event (note « Choix du fond de carte »).
+    "basemap": "osm",
 }
 
 _BOOL_KEYS = {"low_bandwidth", "tracking_required", "aprs_tx_rf"}
@@ -74,6 +76,9 @@ def apply_patch(stored: dict | None, patch: dict) -> dict:
                                       or not -_COORD_KEYS[key] <= value <= _COORD_KEYS[key]):
                 raise InvalidSettings(f"invalid_value:{key}")
             value = float(value) if value is not None else None
+        elif key == "basemap":
+            if not (isinstance(value, str) and 1 <= len(value) <= 40):
+                raise InvalidSettings("invalid_value:basemap")
         elif key == "department":
             if value is not None and not (isinstance(value, str) and 2 <= len(value.strip()) <= 3
                                           and value.strip().isalnum()):
@@ -148,6 +153,8 @@ def logbook_summaries(old: dict | None, new: dict) -> list[str]:
             lines.append(f"Météo : point de prévision {after['weather_lat']:.4f}, {after['weather_lon']:.4f}")
     if before["department"] != after["department"] and after["department"]:
         lines.append(f"Météo : vigilance suivie pour le département {after['department']}")
+    if before["basemap"] != after["basemap"]:
+        lines.append(f"Fond de carte par défaut : {after['basemap']}")
     if before["sync_alert_minutes"] != after["sync_alert_minutes"]:
         lines.append(f"Alerte de synchronisation après {after['sync_alert_minutes']} min")
     return lines
