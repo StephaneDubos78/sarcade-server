@@ -20,7 +20,8 @@ import math
 from sarcade.features.service import InvalidFeature, parse_time
 from sarcade.groups.service import is_pco
 
-TYPES = {"route", "route_waypoint", "route_passage"}
+TYPES = {"route", "route_waypoint", "route_passage", "road_closure", "itinerary"}
+NAV_MODES = {"car", "foot", "offroad"}
 WAYPOINT_TYPES = {"start", "pass", "checkpoint", "supply", "finish"}
 LEG_MODES = {"straight", "paths"}
 PROFILES = {"foot", "vehicle"}
@@ -144,7 +145,60 @@ def validate_passage(payload: dict, *, event_id: str, object_id: str) -> dict:
     return data
 
 
-VALIDATORS = {"route": validate_route, "route_waypoint": validate_waypoint, "route_passage": validate_passage}
+def _line(raw, field: str, minimum: int, maximum: int) -> list[list[float]]:
+    if not isinstance(raw, list) or not minimum <= len(raw) <= maximum:
+        raise InvalidFeature(f"invalid_{field}")
+    out = []
+    for p in raw:
+        if not isinstance(p, (list, tuple)) or len(p) != 2:
+            raise InvalidFeature(f"invalid_{field}")
+        out.append([_coord(p[0], 90, field), _coord(p[1], 180, field)])
+    return out
+
+
+def validate_closure(payload: dict, *, event_id: str, object_id: str) -> dict:
+    """Road closed by the PCO (flood, landslide, roadblock): avoided by every
+    itinerary of the event."""
+    data = _meta(payload, event_id, object_id)
+    active = payload.get("active", True)
+    if not isinstance(active, bool):
+        raise InvalidFeature("invalid_active")
+    data.update({"label": _text(payload.get("label"), "label", 120, required=True),
+                 "points": _line(payload.get("points"), "points", 2, 500), "active": active})
+    return data
+
+
+def validate_itinerary(payload: dict, *, event_id: str, object_id: str) -> dict:
+    """Itinerary shared by an operator: the PCO sees the planned path and the
+    estimated arrival time, updated on the way."""
+    data = _meta(payload, event_id, object_id)
+    mode = payload.get("mode", "car")
+    if mode not in NAV_MODES:
+        raise InvalidFeature("invalid_mode")
+    status = payload.get("status", "active")
+    if status not in ("active", "arrived", "cancelled"):
+        raise InvalidFeature("invalid_status")
+    dest = payload.get("destination") or {}
+    if not isinstance(dest, dict):
+        raise InvalidFeature("invalid_destination")
+    eta = payload.get("eta")
+    data.update({
+        "device_id": _text(payload.get("device_id"), "device_id", 64, required=True),
+        "team_id": _text(payload.get("team_id"), "team_id", 64) or None,
+        "mode": mode, "status": status,
+        "destination": {"lat": _coord(dest.get("lat"), 90, "destination"),
+                        "lon": _coord(dest.get("lon"), 180, "destination"),
+                        "label": _text(dest.get("label"), "destination", 120)},
+        "geometry": _line(payload.get("geometry") or [], "geometry", 0, MAX_LEG_POINTS),
+        "length_m": float(payload.get("length_m") or 0),
+        "remaining_m": float(payload.get("remaining_m") or 0),
+        "eta": parse_time(eta).isoformat() if eta else None,
+    })
+    return data
+
+
+VALIDATORS = {"route": validate_route, "route_waypoint": validate_waypoint, "route_passage": validate_passage,
+              "road_closure": validate_closure, "itinerary": validate_itinerary}
 
 
 def is_assigned(route_data: dict | None) -> bool:
