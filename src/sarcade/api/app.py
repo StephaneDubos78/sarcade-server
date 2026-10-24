@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import uuid
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 from geoalchemy2.elements import WKTElement
@@ -27,12 +27,16 @@ from sarcade.messages import attachments as msg_attachments
 from .deps import get_db
 from . import operations as event_ops
 from . import access as access_api
+from sarcade.access import logbook as access_logbook
+from sarcade.access.verify import AccessMiddleware, identity_of
 
 log = logging.getLogger("sarcade.sync")
 
 app = FastAPI(title="SARCADE Server", version="0.1.0-dev")
 app.include_router(event_ops.router)
 app.include_router(access_api.router)
+# Server-side check of the Cloudflare Access token (off unless configured).
+app.add_middleware(AccessMiddleware)
 
 
 @app.get("/health")
@@ -479,7 +483,7 @@ def _sync_result(operation_id: str, status: str, cursor: int = 0, reason: str | 
 
 
 @app.post("/api/v0.1/sync", response_model=list[SyncResultOut])
-async def synchronize(operations: list[dict], db: Session = Depends(get_db)):
+async def synchronize(operations: list[dict], request: Request, db: Session = Depends(get_db)):
     """Applies a batch of offline operations, each one on its own (« Robustesse
     de la synchronisation »): an operation that fails is undone alone, in its
     savepoint, and gets its own status; it never blocks the others.
@@ -492,6 +496,8 @@ async def synchronize(operations: list[dict], db: Session = Depends(get_db)):
     results = []
     broadcasts = []
     known_events: dict[str, bool] = {}
+    identity = identity_of(request)
+    seen_actors: set[tuple[str, str]] = set()
     for raw in operations:
         operation_id = str(raw.get("operation_id") or "")[:64] if isinstance(raw, dict) else ""
         try:
@@ -522,6 +528,11 @@ async def synchronize(operations: list[dict], db: Session = Depends(get_db)):
             continue
         if message:
             broadcasts.append((op.event_id, message))
+        if identity is not None and status == "accepted":
+            actor = access_logbook.actor_of(op.object_type, op.payload)
+            if actor and (op.event_id, actor) not in seen_actors:
+                seen_actors.add((op.event_id, actor))
+                access_logbook.record_access(db, op.event_id, actor, identity, now)
         reason = _MAP_FEATURE_REASONS.get(status) if op.object_type == "map_feature" else None
         results.append(_sync_result(op.operation_id, status, cursor, reason))
     db.commit()
