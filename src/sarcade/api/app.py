@@ -31,6 +31,7 @@ from . import groups as groups_api
 from . import aprs as aprs_api
 from . import weather as weather_api
 from . import routes as routes_api
+from . import navigation as navigation_api
 from sarcade.weather import service as weather_service
 from sarcade.aprs import links as aprs_links
 from sarcade.aprs import service as aprs_service
@@ -46,6 +47,7 @@ _background_tasks: list = []
 async def lifespan(_app):
     aprs_links.start(_background_tasks)
     weather_service.start(_background_tasks)
+    navigation_api.start(_background_tasks)
     yield
     for task in _background_tasks:
         task.cancel()
@@ -57,6 +59,7 @@ app.include_router(groups_api.router)
 app.include_router(aprs_api.router)
 app.include_router(weather_api.router)
 app.include_router(routes_api.router)
+app.include_router(navigation_api.router)
 app.include_router(access_api.router)
 
 
@@ -444,7 +447,7 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
                      notices: dict | None = None) -> tuple[str, int, dict | None]:
     """Applies one synchronised operation. Raises SyncRejected (or a data
     error) when it cannot be applied; the caller isolates it in a savepoint."""
-    if op.object_type in ROUTE_TYPES:
+    if op.object_type in routes_api.SYNC_TYPES:
         batch = (notices if notices is not None else {}).setdefault(op.event_id, routes_api.Notices())
         return routes_api.apply_route_object(db, op, now, batch)
     if op.object_type == "map_feature":
@@ -518,7 +521,7 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
     return status, cursor, None
 
 
-ROUTE_TYPES = ("route", "route_waypoint", "route_passage")
+
 
 _REJECT_REASONS = {"route": "route invalide ou non autorisée", "route_waypoint": "point de passage invalide",
                    "route_passage": "passage invalide", "map_feature": "objet cartographique invalide", "comm_group": "groupe invalide ou non autorisé"}
