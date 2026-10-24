@@ -26,12 +26,15 @@ from sarcade.messages import attachments as msg_attachments
 
 from .deps import get_db
 from . import operations as event_ops
+from . import groups as groups_api
+from sarcade.groups import service as groups
 from . import access as access_api
 
 log = logging.getLogger("sarcade.sync")
 
 app = FastAPI(title="SARCADE Server", version="0.1.0-dev")
 app.include_router(event_ops.router)
+app.include_router(groups_api.router)
 app.include_router(access_api.router)
 
 
@@ -42,9 +45,15 @@ def health():
 
 @app.post("/api/v0.1/events", response_model=EventOut, status_code=201)
 def create_event(payload: EventCreate, db: Session = Depends(get_db)):
+    now = datetime.now(UTC)
     row = EventRow(id=str(uuid.uuid4()), name=payload.name, kind=payload.kind, summary=payload.summary,
-                   status="draft", created_at=datetime.now(UTC), version=0)
-    db.add(row); db.commit(); db.refresh(row)
+                   status="draft", created_at=now, version=0)
+    db.add(row); db.flush()
+    # ADRASEC default groups, created when the event opens (10 Oct 2026).
+    groups_api.ensure_groups(db, row.id, groups.default_groups(row.id, now), now)
+    db.add(LogbookRow(event_id=row.id, kind="group", object_id=None, actor_id="PCO", time=now,
+                      summary="Groupes par défaut ADRASEC créés"))
+    db.commit(); db.refresh(row)
     return row
 
 
@@ -53,7 +62,10 @@ def create_team(event_id: str, payload: TeamCreate, db: Session = Depends(get_db
     if db.get(EventRow, event_id) is None:
         raise HTTPException(status_code=404, detail="event_not_found")
     row = TeamRow(id=str(uuid.uuid4()), event_id=event_id, name=payload.name)
-    db.add(row); db.commit(); db.refresh(row)
+    db.add(row); db.flush()
+    now = datetime.now(UTC)
+    groups_api.ensure_groups(db, event_id, [groups.team_group(event_id, row.id, row.name, now)], now)
+    db.commit(); db.refresh(row)
     return row
 
 
@@ -409,6 +421,8 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime) -> tuple[s
     error) when it cannot be applied; the caller isolates it in a savepoint."""
     if op.object_type == "map_feature":
         return _apply_map_feature(db, op, now)
+    if op.object_type == "comm_group":
+        return groups_api.apply_group(db, op, now)
     if op.object_type not in VALID_TYPES:
         raise SyncRejected(f"type d'élément inconnu : {op.object_type}")
     if op.object_type == "message" and op.action == "create":
@@ -416,6 +430,9 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime) -> tuple[s
             op.payload["attachments"] = msg_attachments.clean_attachments(op.payload.get("attachments"))
         except ValueError:
             raise SyncRejected("pièces jointes invalides")
+        if not groups_api.message_allowed(db, op.event_id, op.payload.get("sender_id", ""),
+                                          op.payload.get("recipient_ids")):
+            raise SyncRejected("envoi non autorisé dans ce groupe (écoute seule)")
     p = op.payload
     if op.object_type == "ack" and op.action == "create" and db.get(AckRow, op.object_id) is None:
         if db.get(MessageRow, p.get("message_id")) is None:
@@ -470,7 +487,7 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime) -> tuple[s
     return status, cursor, None
 
 
-_MAP_FEATURE_REASONS = {"rejected": "objet cartographique invalide"}
+_REJECT_REASONS = {"map_feature": "objet cartographique invalide", "comm_group": "groupe invalide ou non autorisé"}
 
 
 def _sync_result(operation_id: str, status: str, cursor: int = 0, reason: str | None = None) -> dict:
@@ -522,7 +539,7 @@ async def synchronize(operations: list[dict], db: Session = Depends(get_db)):
             continue
         if message:
             broadcasts.append((op.event_id, message))
-        reason = _MAP_FEATURE_REASONS.get(status) if op.object_type == "map_feature" else None
+        reason = _REJECT_REASONS.get(op.object_type) if status == "rejected" else None
         results.append(_sync_result(op.operation_id, status, cursor, reason))
     db.commit()
     for event_id, payload in broadcasts:
