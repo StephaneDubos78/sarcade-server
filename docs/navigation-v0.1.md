@@ -53,3 +53,16 @@ Administration setting `navigation`: `app` (`operator` by default,
 `organic_maps`, `osmand`, `apple_maps`, `google_maps`, `waze`) and
 `hide_tracking_apps` (hide Google Maps and Waze). Sent to the clients by
 `GET /api/v0.1/clients/config`, `/clients/check` and each heartbeat.
+
+## Variantes d'itinéraire
+
+Décision du porteur du 10 octobre 2026 : **jusqu'à deux variantes**, affichées en gris, l'opérateur touche celle qu'il préfère.
+
+- `POST /api/v0.1/routing` accepte `"alternatives": 0..2` ; la réponse ajoute `"alternatives": [...]` (même forme que l'itinéraire principal).
+- Valhalla propose les variantes (`alternates`) **entre deux points seulement** (pas avec des points de passage).
+- Les variantes **presque identiques** sont écartées : plus de 85 % de leur longueur à moins de 30 m de l'itinéraire principal ou d'une variante déjà retenue.
+- Sur l'appareil (niveau 3), les variantes sont calculées par pénalité des tronçons de l'itinéraire principal, avec le même filtre.
+
+## Mesure du graphe réel
+
+Le workflow `Road graph measure` (manuel, et sur les PR qui touchent `graph.py`) télécharge l'extrait Geofabrik Île-de-France, le découpe aux Yvelines + 10 km, construit le graphe et publie dans le résumé du job : taille du paquet, nombre de sommets et tronçons, durée et mémoire de construction, temps de calcul sur 20 trajets tirés au hasard par mode (A* en Python, borne haute de l'application). Le graphe est joint au job (14 jours) pour les essais sur appareil.

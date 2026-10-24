@@ -12,7 +12,7 @@ import math
 import os
 
 import httpx
-from shapely.geometry import LineString, Polygon, mapping
+from shapely.geometry import LineString, Point, Polygon, mapping
 
 MODES = {
     "car": {"costing": "auto"},
@@ -21,6 +21,10 @@ MODES = {
     "offroad": {"costing": "auto", "costing_options": {"auto": {"use_tracks": 1.0}}},
 }
 CLOSURE_BUFFER_M = 15.0
+# Variants (decision of 10 Oct 2026): at most two, near-identical ones dropped.
+MAX_ALTERNATIVES = 2
+SAME_ROUTE_SHARE = 0.85
+SAME_ROUTE_DISTANCE_M = 30.0
 
 
 class RoutingUnavailable(RuntimeError):
@@ -91,7 +95,7 @@ def closure_polygons(lines: list[list[list[float]]]) -> list[list[list[float]]]:
 
 
 def build_request(points: list[list[float]], mode: str, closures: list[list[list[float]]] | None = None,
-                  language: str = "fr-FR") -> dict:
+                  language: str = "fr-FR", alternatives: int = 0) -> dict:
     if mode not in MODES:
         raise ValueError("invalid_mode")
     if len(points) < 2:
@@ -106,7 +110,49 @@ def build_request(points: list[list[float]], mode: str, closures: list[list[list
     polygons = closure_polygons(closures or [])
     if polygons:
         body["exclude_polygons"] = polygons
+    # Valhalla only proposes variants between two locations (no via points).
+    if alternatives and len(points) == 2:
+        body["alternates"] = min(int(alternatives), MAX_ALTERNATIVES)
     return body
+
+
+def shared_share(candidate: list[list[float]], reference: list[list[float]], within_m: float = SAME_ROUTE_DISTANCE_M,
+                 step_m: float = 25.0) -> float:
+    """Share of the candidate's length lying within ``within_m`` of the
+    reference line, sampled every ``step_m`` (local metric projection)."""
+    if len(candidate) < 2 or len(reference) < 2:
+        return 0.0
+    kx, ky = 111_320 * math.cos(math.radians(candidate[0][0])), 110_540
+
+    def xy(p):
+        return (p[1] * kx, p[0] * ky)
+
+    ref = LineString([xy(p) for p in reference])
+    total = near = 0.0
+    for a, b in zip(candidate, candidate[1:]):
+        (ax, ay), (bx, by) = xy(a), xy(b)
+        seg = math.hypot(bx - ax, by - ay)
+        n = max(1, int(seg // step_m))
+        for i in range(n):
+            t = (i + 0.5) / n
+            total += seg / n
+            if ref.distance(Point(ax + (bx - ax) * t, ay + (by - ay) * t)) <= within_m:
+                near += seg / n
+    return near / total if total else 0.0
+
+
+def distinct_alternatives(main: dict, alternatives: list[dict]) -> list[dict]:
+    """Keeps at most two variants, dropping those that are nearly the same
+    road as the main itinerary or as a variant already kept."""
+    kept: list[dict] = []
+    for alt in alternatives:
+        if any(shared_share(alt["geometry"], other["geometry"]) >= SAME_ROUTE_SHARE
+               for other in [main, *kept]):
+            continue
+        kept.append(alt)
+        if len(kept) == MAX_ALTERNATIVES:
+            break
+    return kept
 
 
 def parse_response(data: dict) -> dict:
@@ -134,8 +180,9 @@ def parse_response(data: dict) -> dict:
             "geometry": geometry, "maneuvers": maneuvers, "legs": legs}
 
 
-async def route(points: list[list[float]], mode: str, closures=None, client: httpx.AsyncClient | None = None) -> dict:
-    body = build_request(points, mode, closures)
+async def route(points: list[list[float]], mode: str, closures=None, client: httpx.AsyncClient | None = None,
+                alternatives: int = 0) -> dict:
+    body = build_request(points, mode, closures, alternatives=alternatives)
     own = client is None
     client = client or httpx.AsyncClient(timeout=30)
     try:
@@ -149,4 +196,14 @@ async def route(points: list[list[float]], mode: str, closures=None, client: htt
         raise NoRoute("no_route")
     if r.status_code >= 500 or r.status_code != 200:
         raise RoutingUnavailable(f"valhalla_status_{r.status_code}")
-    return parse_response(r.json())
+    data = r.json()
+    result = parse_response(data)
+    if alternatives:
+        others = []
+        for alt in (data or {}).get("alternates") or []:
+            try:
+                others.append(parse_response(alt))
+            except NoRoute:
+                continue
+        result["alternatives"] = distinct_alternatives(result, others)
+    return result

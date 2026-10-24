@@ -95,3 +95,26 @@ def test_navigation_setting():
         policy.validate({"navigation": {"app": "mapquest"}})
     with pytest.raises(policy.InvalidSettings, match="navigation_app_hidden"):
         policy.validate({"navigation": {"app": "waze", "hide_tracking_apps": True}})
+
+
+# --- Variants of the server itinerary (decision of 10 Oct 2026) ------------------
+
+def test_variants_requested_only_between_two_points():
+    from sarcade.routing import valhalla
+    body = valhalla.build_request([[48.8, 2.1], [48.9, 2.2]], "car", alternatives=5)
+    assert body["alternates"] == 2
+    assert "alternates" not in valhalla.build_request([[48.8, 2.1], [48.85, 2.1], [48.9, 2.2]], "car", alternatives=2)
+    assert "alternates" not in valhalla.build_request([[48.8, 2.1], [48.9, 2.2]], "car")
+
+
+def test_near_identical_variants_dropped():
+    from sarcade.routing import valhalla
+    main = {"geometry": [[48.80, 2.10], [48.90, 2.10], [48.90, 2.20]]}
+    same = {"geometry": [[48.80, 2.1001], [48.90, 2.1001], [48.90, 2.20]]}
+    other = {"geometry": [[48.80, 2.10], [48.80, 2.20], [48.90, 2.20]]}
+    third = {"geometry": [[48.80, 2.10], [48.85, 2.15], [48.90, 2.20]]}
+    fourth = {"geometry": [[48.80, 2.10], [48.70, 2.15], [48.90, 2.20]]}
+    assert valhalla.shared_share(same["geometry"], main["geometry"]) > 0.95
+    assert valhalla.shared_share(other["geometry"], main["geometry"]) < 0.1
+    kept = valhalla.distinct_alternatives(main, [same, other, dict(other), third, fourth])
+    assert kept == [other, third]
