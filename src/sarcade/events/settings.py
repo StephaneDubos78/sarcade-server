@@ -23,9 +23,15 @@ DEFAULT_SETTINGS: dict = {
     "tracking_default_interval_s": 30,
     "tracking_min_interval_s": 10,
     "tracking_max_interval_s": 600,
+    # APRS (note « APRS »): callsign groups followed by the event, callsigns
+    # added by the PCO for the event, local radio transmission of positions.
+    "aprs_groups": [],
+    "aprs_callsigns": [],
+    "aprs_tx_rf": False,
 }
 
-_BOOL_KEYS = {"low_bandwidth", "tracking_required"}
+_BOOL_KEYS = {"low_bandwidth", "tracking_required", "aprs_tx_rf"}
+_LIST_KEYS = {"aprs_groups", "aprs_callsigns"}
 _INT_RANGES = {
     "low_bandwidth_interval_s": (15, 3600),
     "sync_alert_minutes": (1, 120),
@@ -39,7 +45,7 @@ class InvalidSettings(ValueError):
 
 def merged(stored: dict | None) -> dict:
     """Stored settings completed with the defaults (older events)."""
-    result = dict(DEFAULT_SETTINGS)
+    result = {k: (list(v) if isinstance(v, list) else v) for k, v in DEFAULT_SETTINGS.items()}
     result.update({k: v for k, v in (stored or {}).items() if k in DEFAULT_SETTINGS})
     return result
 
@@ -55,6 +61,8 @@ def apply_patch(stored: dict | None, patch: dict) -> dict:
         if key in _BOOL_KEYS:
             if not isinstance(value, bool):
                 raise InvalidSettings(f"invalid_value:{key}")
+        elif key in _LIST_KEYS:
+            value = _clean_list(key, value)
         elif key in _INTERVAL_KEYS:
             if isinstance(value, bool) or value not in TRACKING_INTERVALS:
                 raise InvalidSettings(f"invalid_value:{key}")
@@ -67,6 +75,19 @@ def apply_patch(stored: dict | None, patch: dict) -> dict:
             <= result["tracking_max_interval_s"]):
         raise InvalidSettings("inconsistent_tracking_bounds")
     return result
+
+
+def _clean_list(key: str, value) -> list[str]:
+    if key == "aprs_callsigns":
+        from sarcade.aprs.callsigns import InvalidCallsign, normalize_list
+        try:
+            return normalize_list(value)
+        except InvalidCallsign as exc:
+            raise InvalidSettings(f"invalid_value:{key}") from exc
+    if not isinstance(value, list) or len(value) > 50 or not all(
+            isinstance(v, str) and 0 < len(v) <= 64 for v in value):
+        raise InvalidSettings(f"invalid_value:{key}")
+    return list(dict.fromkeys(value))
 
 
 def clamp_interval(requested: int | None, settings: dict) -> int:
@@ -100,6 +121,12 @@ def logbook_summaries(old: dict | None, new: dict) -> list[str]:
             "Suivi de position : fréquence de "
             f"{_duration(after['tracking_min_interval_s'])} à {_duration(after['tracking_max_interval_s'])}, "
             f"{_duration(after['tracking_default_interval_s'])} par défaut")
+    if before["aprs_groups"] != after["aprs_groups"] or before["aprs_callsigns"] != after["aprs_callsigns"]:
+        lines.append(f"APRS : {len(after['aprs_groups'])} groupe(s) d'indicatifs et "
+                     f"{len(after['aprs_callsigns'])} indicatif(s) ajouté(s) suivis")
+    if before["aprs_tx_rf"] != after["aprs_tx_rf"]:
+        lines.append("APRS : émission radio locale des positions activée par le PCO" if after["aprs_tx_rf"]
+                     else "APRS : émission radio locale des positions arrêtée")
     if before["sync_alert_minutes"] != after["sync_alert_minutes"]:
         lines.append(f"Alerte de synchronisation après {after['sync_alert_minutes']} min")
     return lines
