@@ -239,7 +239,7 @@ def test_websocket_accepted_with_token(use):
 
 def test_off_mode_changes_nothing(use):
     client = use(Verifier(AccessConfig()))
-    assert client.get("/api/v0.1/events", headers=public()).status_code == 200
+    assert client.get("/api/v0.1/access/status", headers=public()).status_code == 200
     r = client.get("/api/v0.1/access/session", headers=public(token()))
     assert r.status_code == 200 and r.json()["verified"] is None
 
