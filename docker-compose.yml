@@ -51,8 +51,8 @@ services:
       SARCADE_SERVER_ID: ${SARCADE_SERVER_ID:-}
       SARCADE_UPDATE_CHECK: ${SARCADE_UPDATE_CHECK:-1}
       SARCADE_FILE_ROOT: /var/lib/sarcade/files
-      # SIEM (SARCADE Pro, module « siem »): Wazuh syslog over TLS.
-      SARCADE_PRO_MODULES: ${SARCADE_PRO_MODULES:-}
+      # SIEM (SARCADE Pro, module « siem », signed licence uploaded in the
+      # administration tool, docs/pro-licences-v0.1.md): Wazuh syslog over TLS.
       SARCADE_SIEM_HOST: ${SARCADE_SIEM_HOST:-}
       SARCADE_SIEM_PORT: ${SARCADE_SIEM_PORT:-6514}
       SARCADE_SIEM_FORMAT: ${SARCADE_SIEM_FORMAT:-syslog}
