@@ -13,7 +13,12 @@ DEFAULTS = {
                     "windows": [{"days": [1], "start": "03:00", "end": "05:00"}]},
     "journal_retention_days": 365,
     "clients": {"min_version": None},
+    # Navigation level 1 (decision of 10 Oct 2026): application opened
+    # directly by « Open in… », and hiding of the apps that send data.
+    "navigation": {"app": "operator", "hide_tracking_apps": False},
 }
+NAVIGATION_APPS = ("operator", "organic_maps", "osmand", "apple_maps", "google_maps", "waze")
+TRACKING_APPS = ("google_maps", "waze")
 _HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _VERSION = re.compile(r"^v?\d+(\.\d+){0,3}([-+][0-9A-Za-z.\-+]*)?$")
 
@@ -84,6 +89,18 @@ def validate(settings: dict) -> dict:
     if mv is not None and (not isinstance(mv, str) or not _VERSION.match(mv.strip())):
         raise InvalidSettings("invalid_min_version")
     out["clients"] = {"min_version": mv.strip() if mv else None}
+    nav = settings.get("navigation", {}) or {}
+    if not isinstance(nav, dict):
+        raise InvalidSettings("invalid_navigation")
+    app = nav.get("app", "operator")
+    if app not in NAVIGATION_APPS:
+        raise InvalidSettings("invalid_navigation_app")
+    hide = nav.get("hide_tracking_apps", False)
+    if not isinstance(hide, bool):
+        raise InvalidSettings("invalid_hide_tracking_apps")
+    if hide and app in TRACKING_APPS:
+        raise InvalidSettings("navigation_app_hidden")
+    out["navigation"] = {"app": app, "hide_tracking_apps": hide}
     return out
 
 

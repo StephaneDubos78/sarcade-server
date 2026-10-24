@@ -1,6 +1,8 @@
 FROM python:3.12-slim
 
 WORKDIR /app
+# libexpat: needed by pyosmium (road graph of navigation on the device).
+RUN apt-get update && apt-get install -y --no-install-recommends libexpat1 && rm -rf /var/lib/apt/lists/*
 # Dependencies pinned by uv.lock and checked against their hashes, so that
 # every build is reproducible (note « Mises à jour et sécurité »).
 COPY pyproject.toml uv.lock ./
