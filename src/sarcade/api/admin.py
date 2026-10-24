@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from sarcade import licensing
+from sarcade import licensing, tls
 from sarcade.db.models import SecurityEventRow, ServerUpdateRow
 from sarcade.security import journal, siem
 from sarcade.updates import policy
@@ -191,7 +191,8 @@ def update_report(payload: UpdateReport, request: Request, _admin: str = Depends
 @router.get("/admin/status")
 def admin_status(_admin: str = Depends(require_admin)):
     return {"version": updates.installed_version(), "server_id": journal.server_id(),
-            "pro_modules": sorted(licensing.enabled_modules()), "siem": dict(siem.state)}
+            "pro_modules": sorted(licensing.enabled_modules()), "siem": dict(siem.state),
+            "tls": tls.state()}
 
 
 # --- Client applications ------------------------------------------------------
@@ -214,8 +215,8 @@ def client_check(payload: ClientCheck, request: Request, db: Session = Depends(g
 
 @router.get("/clients/config")
 def client_config(db: Session = Depends(get_db)):
-    """Settings of the organisation the clients apply (navigation app)."""
-    return {"navigation": updates.admin_settings(db)["navigation"]}
+    """Settings of the organisation the clients apply (navigation app, HTTPS)."""
+    return updates.client_organization(db)
 
 
 def clients_root() -> Path:
