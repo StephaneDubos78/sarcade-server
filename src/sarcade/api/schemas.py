@@ -73,6 +73,8 @@ class SyncResultOut(BaseModel):
     status: str
     server_time: datetime
     sync_cursor: str | None = None
+    # Readable reason when the operation is not accepted.
+    reason: str | None = None
 
 
 class ReferenceSiteOut(BaseModel):
