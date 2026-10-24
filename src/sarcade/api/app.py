@@ -32,6 +32,7 @@ from . import aprs as aprs_api
 from . import weather as weather_api
 from . import routes as routes_api
 from . import navigation as navigation_api
+from . import basemaps as basemaps_api
 from sarcade.weather import service as weather_service
 from sarcade.aprs import links as aprs_links
 from sarcade.aprs import service as aprs_service
@@ -60,6 +61,7 @@ app.include_router(aprs_api.router)
 app.include_router(weather_api.router)
 app.include_router(routes_api.router)
 app.include_router(navigation_api.router)
+app.include_router(basemaps_api.router)
 app.include_router(access_api.router)
 
 
