@@ -30,6 +30,7 @@ from . import operations as event_ops
 from . import groups as groups_api
 from . import aprs as aprs_api
 from . import weather as weather_api
+from . import routes as routes_api
 from sarcade.weather import service as weather_service
 from sarcade.aprs import links as aprs_links
 from sarcade.aprs import service as aprs_service
@@ -55,6 +56,7 @@ app.include_router(event_ops.router)
 app.include_router(groups_api.router)
 app.include_router(aprs_api.router)
 app.include_router(weather_api.router)
+app.include_router(routes_api.router)
 app.include_router(access_api.router)
 
 
@@ -438,9 +440,13 @@ class SyncRejected(Exception):
         self.reason = reason
 
 
-def _apply_operation(db: Session, op: SyncOperationIn, now: datetime) -> tuple[str, int, dict | None]:
+def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
+                     notices: dict | None = None) -> tuple[str, int, dict | None]:
     """Applies one synchronised operation. Raises SyncRejected (or a data
     error) when it cannot be applied; the caller isolates it in a savepoint."""
+    if op.object_type in ROUTE_TYPES:
+        batch = (notices if notices is not None else {}).setdefault(op.event_id, routes_api.Notices())
+        return routes_api.apply_route_object(db, op, now, batch)
     if op.object_type == "map_feature":
         return _apply_map_feature(db, op, now)
     if op.object_type == "comm_group":
@@ -512,7 +518,10 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime) -> tuple[s
     return status, cursor, None
 
 
-_REJECT_REASONS = {"map_feature": "objet cartographique invalide", "comm_group": "groupe invalide ou non autorisé"}
+ROUTE_TYPES = ("route", "route_waypoint", "route_passage")
+
+_REJECT_REASONS = {"route": "route invalide ou non autorisée", "route_waypoint": "point de passage invalide",
+                   "route_passage": "passage invalide", "map_feature": "objet cartographique invalide", "comm_group": "groupe invalide ou non autorisé"}
 
 
 def _sync_result(operation_id: str, status: str, cursor: int = 0, reason: str | None = None) -> dict:
@@ -534,6 +543,7 @@ async def synchronize(operations: list[dict], db: Session = Depends(get_db)):
     results = []
     broadcasts = []
     known_events: dict[str, bool] = {}
+    notices: dict[str, routes_api.Notices] = {}
     for raw in operations:
         operation_id = str(raw.get("operation_id") or "")[:64] if isinstance(raw, dict) else ""
         try:
@@ -550,7 +560,7 @@ async def synchronize(operations: list[dict], db: Session = Depends(get_db)):
         now = datetime.now(UTC)
         try:
             with db.begin_nested():
-                status, cursor, message = _apply_operation(db, op, now)
+                status, cursor, message = _apply_operation(db, op, now, notices)
         except SyncRejected as exc:
             results.append(_sync_result(op.operation_id, "rejected", reason=exc.reason))
             continue
@@ -566,6 +576,9 @@ async def synchronize(operations: list[dict], db: Session = Depends(get_db)):
             broadcasts.append((op.event_id, message))
         reason = _REJECT_REASONS.get(op.object_type) if status == "rejected" else None
         results.append(_sync_result(op.operation_id, status, cursor, reason))
+    for event_id, batch in notices.items():
+        for payload in routes_api.flush_notices(db, event_id, batch, datetime.now(UTC)):
+            broadcasts.append((event_id, payload))
     db.commit()
     for event_id, payload in broadcasts:
         await manager.broadcast(event_id, payload)

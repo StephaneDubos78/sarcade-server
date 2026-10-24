@@ -1,0 +1,275 @@
+"""Routes with waypoints: synchronisation, team notifications, listing, GPX."""
+from __future__ import annotations
+
+from datetime import UTC, datetime
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from sarcade.db.models import CommGroupRow, EventRow, LogbookRow, MessageRow, RouteObjectRow, SyncOperationRow
+from sarcade.features import service as features
+from sarcade.groups import service as groups
+from sarcade.routes import service as routes
+from sarcade.sync.service import record_operation
+
+from .deps import get_db
+
+router = APIRouter(prefix="/api/v0.1")
+_META = ("id", "event_id", "updated_at", "updated_by", "created_by", "base_point_order")
+SYSTEM_SENDER = "SARCADE"
+
+
+def object_dict(row: RouteObjectRow) -> dict:
+    data = dict(row.data)
+    data.update({"id": row.id, "event_id": row.event_id, "kind": row.kind, "created_by": row.created_by,
+                 "updated_by": row.updated_by, "updated_at": features.iso(row.updated_at),
+                 "revision": row.revision, "deleted": row.deleted_at is not None})
+    return data
+
+
+class Notices:
+    """Changes of assigned routes collected during one sync batch: one
+    message per route to its team, urgent, to acknowledge."""
+
+    def __init__(self):
+        self.changes: dict[str, list[str]] = {}
+        self.order_conflicts: list[tuple[str, str, str]] = []
+
+    def add(self, route_id: str, text: str) -> None:
+        self.changes.setdefault(route_id, [])
+        if text not in self.changes[route_id]:
+            self.changes[route_id].append(text)
+
+
+def _route(db: Session, route_id: str | None) -> RouteObjectRow | None:
+    if not route_id:
+        return None
+    row = db.get(RouteObjectRow, route_id)
+    return row if row is not None and row.kind == "route" else None
+
+
+def apply_route_object(db: Session, op, now: datetime, notices: Notices) -> tuple[str, int, dict | None]:
+    kind = op.object_type
+    if op.action not in ("create", "update", "delete"):
+        return "rejected", 0, None
+    try:
+        if op.action == "delete":
+            change = features.validate_delete(op.payload, event_id=op.event_id, object_id=op.object_id)
+        else:
+            change = routes.VALIDATORS[kind](op.payload, event_id=op.event_id, object_id=op.object_id)
+    except features.InvalidFeature:
+        return "rejected", 0, None
+    if db.get(EventRow, op.event_id) is None:
+        return "rejected", 0, None
+    row = db.get(RouteObjectRow, op.object_id)
+    if row is not None and (row.event_id != op.event_id or row.kind != kind):
+        return "rejected", 0, None
+
+    # Rights: an assigned route and its waypoints are changed only by the
+    # route author and the PCO. Passages are recorded by the team.
+    actor = change["updated_by"]
+    if kind == "route":
+        if row is not None and not routes.can_edit(row.data, row.created_by, actor):
+            return "rejected", 0, None
+        route_row = row
+    else:
+        route_id = change.get("route_id") or (row.route_id if row is not None else None)
+        route_row = _route(db, route_id)
+        if kind == "route_waypoint" and route_row is not None and not routes.can_edit(
+                route_row.data, route_row.created_by, actor):
+            return "rejected", 0, None
+    change["updated_at"] = features.clamp_time(change["updated_at"], now)
+
+    status, cursor = record_operation(
+        db, event_id=op.event_id, operation_id=op.operation_id, object_id=op.object_id,
+        object_type=kind, action=op.action, payload=op.payload, client_time=op.client_time)
+    if status != "accepted":
+        return status, cursor, None
+    journal = db.scalar(select(SyncOperationRow).where(SyncOperationRow.seq == cursor))
+    decision = features.decide(op.action, change, row)
+    if decision.status != "accepted":
+        journal.status = "conflict"
+        return "conflict", cursor, None
+
+    before = dict(row.data) if row is not None else None
+    was_deleted = row is not None and row.deleted_at is not None
+    if row is None:
+        row = RouteObjectRow(id=op.object_id, event_id=op.event_id, kind=kind,
+                             created_by=change.get("created_by", actor), created_at=now, revision=0,
+                             data={"name": ""})
+        db.add(row)
+    if decision.tombstone:
+        row.deleted_at = change["updated_at"]
+    else:
+        row.data = {k: v for k, v in change.items() if k not in _META}
+        row.route_id = change.get("route_id") if kind != "route" else row.id
+        row.deleted_at = None
+    row.updated_at, row.updated_by = change["updated_at"], actor
+    row.revision = (row.revision or 0) + 1
+    db.flush()
+    result = object_dict(row)
+    journal.payload = result
+    _logbook_and_notices(db, op.event_id, kind, row, before, was_deleted, change, route_row, notices, now)
+    suffix = "deleted" if row.deleted_at is not None else "upserted"
+    return "accepted", cursor, {"type": f"{kind}.{suffix}", "data": result}
+
+
+def _logbook_and_notices(db, event_id, kind, row, before, was_deleted, change, route_row, notices, now):
+    actor = change["updated_by"]
+    name = (row.data or {}).get("name", "")
+
+    def log(text):
+        db.add(LogbookRow(event_id=event_id, kind="route", object_id=row.id, actor_id=actor, summary=text, time=now))
+
+    if kind == "route":
+        if row.deleted_at is not None:
+            if before is not None and not was_deleted:
+                log(f"Route supprimée : « {(before or {}).get('name', '')} »")
+            return
+        if before is None or was_deleted:
+            log(f"Route créée : « {name} »")
+        data = row.data
+        assigned_before = routes.is_assigned(before) if before else False
+        if routes.is_assigned(data) and (not assigned_before or (
+                before.get("assigned_team_id"), before.get("assigned_group_id")) != (
+                data.get("assigned_team_id"), data.get("assigned_group_id"))):
+            log(f"Route « {name} » affectée")
+            notices.add(row.id, "route affectée à votre équipe")
+        elif assigned_before and routes.is_assigned(data):
+            if before.get("point_order") != data.get("point_order"):
+                notices.add(row.id, "ordre des points modifié")
+                if routes.concurrent_order_change(before.get("point_order"), change.get("base_point_order"),
+                                                  data.get("point_order")):
+                    notices.order_conflicts.append((row.id, name, actor))
+            elif before != data:
+                notices.add(row.id, "caractéristiques de la route modifiées")
+        return
+    if kind == "route_waypoint":
+        if route_row is None or not routes.is_assigned(route_row.data):
+            return
+        wp = (before or {}).get("name") or name
+        if row.deleted_at is not None:
+            notices.add(route_row.id, f"point « {wp} » supprimé")
+        elif before is None or was_deleted:
+            notices.add(route_row.id, f"point « {name} » ajouté")
+        elif (before.get("lat"), before.get("lon")) != (row.data.get("lat"), row.data.get("lon")):
+            notices.add(route_row.id, f"point « {name} » déplacé")
+        elif before != row.data:
+            notices.add(route_row.id, f"point « {name} » modifié")
+        return
+    if kind == "route_passage" and row.deleted_at is None:
+        waypoint = db.get(RouteObjectRow, row.data.get("waypoint_id"))
+        wp = (waypoint.data or {}).get("name", "?") if waypoint else "?"
+        route_name = (route_row.data or {}).get("name", "?") if route_row else "?"
+        if before is None:
+            how = "automatique" if row.data.get("mode") == "auto" else "manuel"
+            log(f"Passage au point « {wp} » de la route « {route_name} » ({how})")
+        elif row.data.get("cancelled") and not before.get("cancelled"):
+            log(f"Passage annulé au point « {wp} » de la route « {route_name} »")
+
+
+def flush_notices(db: Session, event_id: str, notices: Notices, now: datetime) -> list[dict]:
+    """Creates the urgent messages to the teams and the PCO warnings.
+    Returns realtime payloads to broadcast."""
+    payloads = []
+    for route_id, changes in notices.changes.items():
+        route = _route(db, route_id)
+        if route is None or not routes.is_assigned(route.data):
+            continue
+        data = route.data
+        target = data.get("assigned_group_id") or groups.team_group_id(event_id, data["assigned_team_id"])
+        if data.get("assigned_group_id") is None and db.get(CommGroupRow, target) is None:
+            target = None
+        recipients = [f"{groups.GROUP_PREFIX}{target}"] if target else []
+        if data.get("assigned_team_id") and not target:
+            recipients = [data["assigned_team_id"]]
+        body = routes.change_summary(data.get("name", ""), changes)
+        msg = MessageRow(id=str(uuid.uuid4()), event_id=event_id, sender_id=SYSTEM_SENDER,
+                         recipient_ids=recipients, priority="urgent", body=body, attachments=None, created_at=now)
+        db.add(msg)
+        db.add(LogbookRow(event_id=event_id, kind="message", object_id=msg.id, actor_id=SYSTEM_SENDER,
+                          summary=body, time=now))
+        payloads.append({"type": "message.created", "data": {
+            "id": msg.id, "event_id": event_id, "sender_id": SYSTEM_SENDER, "recipient_ids": recipients,
+            "priority": "urgent", "body": body, "attachments": [], "route_id": route_id,
+            "created_at": features.iso(now)}})
+    for route_id, name, actor in notices.order_conflicts:
+        text = f"Ordre des points de la route « {name} » modifié en même temps par plusieurs personnes : la dernière version ({actor}) l'emporte"
+        db.add(LogbookRow(event_id=event_id, kind="route", object_id=route_id, actor_id=actor, summary=text, time=now))
+        payloads.append({"type": "route.order_conflict", "data": {"route_id": route_id, "summary": text}})
+    return payloads
+
+
+def route_view(route: RouteObjectRow, children: list[RouteObjectRow]) -> dict:
+    """A route with its ordered waypoints, distances and passages."""
+    data = object_dict(route)
+    waypoints = {c.id: object_dict(c) for c in children if c.kind == "route_waypoint" and c.deleted_at is None}
+    order = [i for i in route.data.get("point_order", []) if i in waypoints]
+    order += sorted((i for i in waypoints if i not in order), key=lambda i: waypoints[i]["updated_at"])
+    ordered = [waypoints[i] for i in order]
+    total = 0.0
+    for previous, w in zip(ordered, ordered[1:]):
+        w["leg_length_m"] = round(routes.leg_length_m(previous, w), 1)
+        total += w["leg_length_m"]
+        w["cumulative_m"] = round(total, 1)
+    if ordered:
+        ordered[0]["leg_length_m"], ordered[0]["cumulative_m"] = 0.0, 0.0
+    data["waypoints"] = ordered
+    data["total_length_m"] = round(total, 1)
+    data["passages"] = [object_dict(c) for c in children if c.kind == "route_passage" and c.deleted_at is None]
+    return data
+
+
+@router.get("/events/{event_id}/routes")
+def list_routes(event_id: str, db: Session = Depends(get_db)):
+    if db.get(EventRow, event_id) is None:
+        raise HTTPException(status_code=404, detail="event_not_found")
+    rows = db.scalars(select(RouteObjectRow).where(RouteObjectRow.event_id == event_id)).all()
+    by_route: dict[str, list] = {}
+    for r in rows:
+        if r.kind != "route":
+            by_route.setdefault(r.route_id, []).append(r)
+    return [route_view(r, by_route.get(r.id, [])) for r in rows if r.kind == "route" and r.deleted_at is None]
+
+
+@router.get("/events/{event_id}/routes/{route_id}.gpx")
+def route_gpx(event_id: str, route_id: str, db: Session = Depends(get_db)):
+    route = _route(db, route_id)
+    if route is None or route.event_id != event_id or route.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="route_not_found")
+    children = db.scalars(select(RouteObjectRow).where(RouteObjectRow.route_id == route_id)).all()
+    view = route_view(route, list(children))
+    name = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in view["name"]) or "route"
+    return Response(routes.gpx(view, view["waypoints"]), media_type="application/gpx+xml",
+                    headers={"Content-Disposition": f'attachment; filename="{name}.gpx"'})
+
+
+class Report(BaseModel):
+    actor_id: str = Field(min_length=1, max_length=64)
+    waypoint_id: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=300)
+
+
+@router.post("/events/{event_id}/routes/{route_id}/reports", status_code=201)
+async def report_waypoint(event_id: str, route_id: str, payload: Report, db: Session = Depends(get_db)):
+    """The team reports an impracticable waypoint; the PCO decides."""
+    from sarcade.realtime.manager import manager
+
+    route = _route(db, route_id)
+    waypoint = db.get(RouteObjectRow, payload.waypoint_id)
+    if route is None or route.event_id != event_id or waypoint is None or waypoint.route_id != route_id:
+        raise HTTPException(status_code=404, detail="route_or_waypoint_not_found")
+    now = datetime.now(UTC)
+    text = (f"Point « {waypoint.data.get('name', '')} » de la route « {route.data.get('name', '')} » "
+            f"signalé impraticable : {payload.reason.strip()}")
+    db.add(LogbookRow(event_id=event_id, kind="route", object_id=waypoint.id, actor_id=payload.actor_id,
+                      summary=text, time=now))
+    db.commit()
+    data = {"route_id": route_id, "waypoint_id": waypoint.id, "actor_id": payload.actor_id,
+            "reason": payload.reason.strip(), "summary": text, "time": features.iso(now)}
+    await manager.broadcast(event_id, {"type": "route.report", "data": data})
+    return data
