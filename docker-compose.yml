@@ -24,6 +24,12 @@ services:
     build: .
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sarcade}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-sarcade}
+      # APRS (docs/aprs-v0.1.md): APRS-IS over the Internet and/or local radio
+      # through a KISS TCP modem such as Dire Wolf on the Gateway.
+      SARCADE_APRS_IS: ${SARCADE_APRS_IS:-0}
+      SARCADE_APRS_CALLSIGN: ${SARCADE_APRS_CALLSIGN:-}
+      SARCADE_KISS_HOST: ${SARCADE_KISS_HOST:-}
+      SARCADE_KISS_PORT: ${SARCADE_KISS_PORT:-8001}
     ports:
       - "8000:8000"
     depends_on:

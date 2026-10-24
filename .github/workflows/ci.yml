@@ -52,6 +52,9 @@ jobs:
       - name: Verify sync robustness and the event list
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_sync_robustness.py"
+      - name: Verify APRS (callsign groups, filtering, deduplication)
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_aprs.py"
       - name: Verify the embedded web client
         run: |
           curl -fsS http://localhost:8000/ -o index.html
