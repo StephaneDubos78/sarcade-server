@@ -33,6 +33,9 @@ from . import weather as weather_api
 from . import routes as routes_api
 from . import navigation as navigation_api
 from . import basemaps as basemaps_api
+from . import admin as admin_api
+from sarcade.security import journal as security_journal, siem, watch as security_watch
+from sarcade.updates import service as updates_service
 from sarcade.weather import service as weather_service
 from sarcade.aprs import links as aprs_links
 from sarcade.aprs import service as aprs_service
@@ -49,6 +52,8 @@ async def lifespan(_app):
     aprs_links.start(_background_tasks)
     weather_service.start(_background_tasks)
     navigation_api.start(_background_tasks)
+    updates_service.start(_background_tasks)
+    siem.start(_background_tasks)
     yield
     for task in _background_tasks:
         task.cancel()
@@ -62,6 +67,8 @@ app.include_router(weather_api.router)
 app.include_router(routes_api.router)
 app.include_router(navigation_api.router)
 app.include_router(basemaps_api.router)
+app.include_router(admin_api.router)
+app.middleware("http")(security_watch.middleware)
 app.include_router(access_api.router)
 
 
@@ -440,9 +447,11 @@ def _iso(value) -> datetime:
 class SyncRejected(Exception):
     """The operation can never be applied: the client sets it aside."""
 
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, journal: dict | None = None):
         super().__init__(reason)
         self.reason = reason
+        # Security journal entry, written after the savepoint is undone.
+        self.journal = journal
 
 
 def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
@@ -465,7 +474,11 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
             raise SyncRejected("pièces jointes invalides")
         if not groups_api.message_allowed(db, op.event_id, op.payload.get("sender_id", ""),
                                           op.payload.get("recipient_ids")):
-            raise SyncRejected("envoi non autorisé dans ce groupe (écoute seule)")
+            raise SyncRejected("envoi non autorisé dans ce groupe (écoute seule)", journal=dict(
+                category="rights", action="write_refused", outcome="refused",
+                actor=str(op.payload.get("sender_id", ""))[:64] or None, event_id=op.event_id,
+                details={"object_type": "message", "reason": "listen_only_or_archived_group",
+                         "recipients": op.payload.get("recipient_ids") or []}))
     p = op.payload
     if op.object_type == "ack" and op.action == "create" and db.get(AckRow, op.object_id) is None:
         if db.get(MessageRow, p.get("message_id")) is None:
@@ -567,6 +580,8 @@ async def synchronize(operations: list[dict], db: Session = Depends(get_db)):
             with db.begin_nested():
                 status, cursor, message = _apply_operation(db, op, now, notices)
         except SyncRejected as exc:
+            if exc.journal:
+                security_journal.record(db, **exc.journal)
             results.append(_sync_result(op.operation_id, "rejected", reason=exc.reason))
             continue
         except (KeyError, TypeError, ValueError, IntegrityError, DataError) as exc:
