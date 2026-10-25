@@ -9,9 +9,11 @@ from fastapi import FastAPI
 from starlette.staticfiles import StaticFiles
 from starlette.types import Receive, Scope, Send
 
-# Files the browser must re-check at every start so a new client version is
-# picked up; the hashed assets (main.dart.js, canvaskit) may be cached.
-_REVALIDATE = {"", "index.html", "manifest.json", "flutter_bootstrap.js", "flutter_service_worker.js", "version.json"}
+# Every file of the client is re-checked at each start (« no-cache »: the
+# browser keeps its copy but asks the server, which answers 304 when it is
+# unchanged). Flutter file names are not hashed: main.dart.js kept for hours
+# by a browser or by Cloudflare left clients on an old version (recette of
+# the lot 2, 25 October 2026).
 
 
 class _WebClientFiles(StaticFiles):
@@ -22,8 +24,7 @@ class _WebClientFiles(StaticFiles):
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
-                if relative in _REVALIDATE:
-                    headers.append((b"cache-control", b"no-cache"))
+                headers.append((b"cache-control", b"no-cache"))
                 headers.append((b"x-content-type-options", b"nosniff"))
                 message = {**message, "headers": headers}
             await send(message)
