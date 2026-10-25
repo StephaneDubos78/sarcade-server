@@ -19,7 +19,7 @@ from sarcade.security import journal
 from . import policy
 
 log = logging.getLogger("sarcade.updates")
-DEFAULT_RELEASES_URL = "https://api.github.com/repos/StephaneDubos78/sarcade-server/releases/latest"
+DEFAULT_RELEASES_URL = "https://api.github.com/repos/sdubos-consulting/sarcade-server/releases/latest"
 CLIENT_PLATFORMS = ("windows", "appimage", "apk")
 
 
