@@ -60,6 +60,18 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="SARCADE Server", version="0.1.0-dev", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def no_store_for_api(request, call_next):
+    """API answers are live data: no cache, browser or proxy, may keep them.
+    A Cloudflare cache rule once kept the change feed for hours and clients
+    stopped seeing new messages (25 October 2026)."""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/") or request.url.path == "/health":
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
 app.include_router(event_ops.router)
 app.include_router(groups_api.router)
 app.include_router(aprs_api.router)
