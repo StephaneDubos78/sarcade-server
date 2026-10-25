@@ -7,7 +7,7 @@
 ## Démarrer
 Dans PowerShell :
 ```powershell
-git clone https://github.com/StephaneDubos78/sarcade-server.git
+git clone https://github.com/sdubos-consulting/sarcade-server.git
 cd sarcade-server\demo
 .\start-demo.ps1
 ```

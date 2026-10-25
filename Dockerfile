@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -e .
 
 # Web client (browsers, ChromeOS PWA) served at "/". Empty URL = API only.
 # Change SARCADE_WEB_CACHEBUST to fetch a newer client without --no-cache.
-ARG SARCADE_WEB_URL=https://github.com/StephaneDubos78/sarcade-app/releases/download/web-dev/sarcade-web.tar.gz
+ARG SARCADE_WEB_URL=https://github.com/sdubos-consulting/sarcade-app/releases/download/web-dev/sarcade-web.tar.gz
 ARG SARCADE_WEB_CACHEBUST=0
 COPY docker/fetch_web_client.py /tmp/fetch_web_client.py
 RUN echo "cachebust ${SARCADE_WEB_CACHEBUST}" && python /tmp/fetch_web_client.py "$SARCADE_WEB_URL" /app/web && rm /tmp/fetch_web_client.py

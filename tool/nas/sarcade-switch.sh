@@ -78,7 +78,9 @@ git_ checkout -q -B "$target" "origin/$target"
 git_ log --oneline -1
 
 say "Reconstruction (quelques minutes)"
-compose up -d --build
+# Nouveau numéro à chaque fois : l'image récupère toujours le dernier client web.
+compose build --build-arg SARCADE_WEB_CACHEBUST="$(date +%s)"
+compose up -d
 
 say "Attente du serveur"
 for i in $(seq 1 45); do
