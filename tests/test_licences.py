@@ -27,7 +27,7 @@ def cert(not_before=date(2026, 1, 1), not_after=date(2029, 1, 1), key=KEY, root=
     return issue.make_key_certificate(root, root_id, key, key_id, not_before, not_after)
 
 
-def licence(kind="association", modules=("siem", "locate"), issued=date(2026, 10, 1), expires=date(2027, 10, 1),
+def licence(kind="association", modules=("siem", "assist"), issued=date(2026, 10, 1), expires=date(2027, 10, 1),
             certificate=None, key=KEY, licence_id="L-1"):
     return issue.make_licence(key, certificate or cert(key=key), "ADRASEC 78", kind, list(modules), issued, expires,
                               licence_id)
@@ -35,7 +35,7 @@ def licence(kind="association", modules=("siem", "locate"), issued=date(2026, 10
 
 def test_valid_association_licence():
     s = core.verify(licence(), NOW)
-    assert s.status == "valid" and s.modules == {"siem", "locate"}
+    assert s.status == "valid" and s.modules == {"siem", "assist"}
     d = s.as_dict()
     assert d["organisation"] == "ADRASEC 78" and d["kind"] == "association" and d["days_left"] == 356
 
@@ -74,7 +74,7 @@ def test_expiry_grace_then_pro_modules_stop():
     doc = licence(expires=date(2026, 10, 20))
     assert core.verify(doc, NOW).status == "expiring"
     grace = core.verify(doc, datetime(2026, 11, 15, tzinfo=UTC))
-    assert grace.status == "grace" and grace.modules == {"siem", "locate"}
+    assert grace.status == "grace" and grace.modules == {"siem", "assist"}
     gone = core.verify(doc, datetime(2026, 11, 20, tzinfo=UTC))
     assert gone.status == "expired" and gone.modules == set()
 
@@ -101,13 +101,13 @@ def test_test_root_only_for_test_licences(monkeypatch):
 def test_install_refuses_invalid_and_keeps_installed():
     good = licence()
     assert licensing.install(good, NOW).status == "valid"
-    assert licensing.pro_enabled("siem") and not licensing.pro_enabled("assist")
+    assert licensing.pro_enabled("siem") and licensing.pro_enabled("assist") and not licensing.pro_enabled("locate")
     bad = licence()
     bad["signature"] = good["signature"][:-4] + "AAA="
     assert licensing.install(bad, NOW).status == "invalid"
     assert json.loads(licensing.licence_path().read_text())["licence"]["id"] == "L-1"
     assert licensing.check(NOW).status == "valid"
-    assert licensing.client_view() == {"modules": ["locate", "siem"], "status": "valid"}
+    assert licensing.client_view() == {"modules": ["assist", "siem"], "status": "valid"}
 
 
 def test_issuing_cli(tmp_path, monkeypatch, capsys):
@@ -121,10 +121,20 @@ def test_issuing_cli(tmp_path, monkeypatch, capsys):
     issue.main(["new-key", "--root", str(tmp_path / "root.key"), "--root-id", "R-CLI", "--id", "K-CLI",
                 "--out", str(tmp_path / "key.key")])
     issue.main(["sign", "--key", str(tmp_path / "key.key"), "--organisation", "ADRASEC 78", "--kind", "association",
-                "--modules", "siem,locate,assist", "--out", str(tmp_path / "l.json")])
+                "--modules", "siem,assist", "--out", str(tmp_path / "l.json")])
     assert issue.main(["verify", str(tmp_path / "l.json")]) == 0
     doc = json.loads((tmp_path / "l.json").read_text())
-    assert doc["licence"]["price_eur"] == 0 and doc["licence"]["modules"] == ["assist", "locate", "siem"]
+    assert doc["licence"]["price_eur"] == 0 and doc["licence"]["modules"] == ["assist", "siem"]
     # No key is ever overwritten.
     with pytest.raises(SystemExit):
         issue.main(["init-root", "--id", "R-CLI", "--out", str(tmp_path / "root.key")])
+
+
+def test_locate_is_no_longer_a_pro_module():
+    """Locate removed (ADR-006, 25 October 2026): an older licence naming it
+    stays valid, the unknown module is simply not enabled."""
+    old = licence(modules=("siem",))
+    old["licence"]["modules"] = ["locate", "siem"]  # issued before the removal
+    old["signature"] = issue.sign_b64(KEY, old["licence"])
+    s = core.verify(old, NOW)
+    assert s.status == "valid" and s.modules == {"siem"}

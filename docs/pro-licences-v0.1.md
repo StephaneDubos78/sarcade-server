@@ -2,7 +2,7 @@
 
 Notes du coffre : « 11 - Architecture modulaire et SARCADE Pro », « Mises à jour et sécurité » (décisions validées par le porteur le 10 octobre 2026).
 
-Le code reste entièrement libre (AGPL). La licence n'active que les **modules Pro** (`siem`, `locate`, `assist`) ; **Core ne dépend jamais d'une licence**. Les applications sont gratuites : elles affichent les fonctions Pro quand le serveur les annonce.
+Le code reste entièrement libre (AGPL). La licence n'active que les **modules Pro** (`siem`, `assist` ; `locate` retiré le 25 octobre 2026, ADR-006 : recherche de balises, SDR et 406 MHz dans le Core) ; **Core ne dépend jamais d'une licence**. Les applications sont gratuites : elles affichent les fonctions Pro quand le serveur les annonce.
 
 ## Chaîne de confiance (Ed25519)
 
@@ -22,7 +22,7 @@ clé racine (hors ligne, chez le porteur)
 {
   "format": "sarcade-licence/1",
   "licence": {"id": "L-2026-1a2b3c4d", "organisation": "ADRASEC 78", "kind": "association",
-              "modules": ["assist", "locate", "siem"], "issued_at": "2026-10-10",
+              "modules": ["assist", "siem"], "issued_at": "2026-10-10",
               "expires_at": "2027-10-10", "price_eur": 0},
   "signature": "…",
   "key": {"id": "K-2026-1", "root": "R-2026", "public_key": "…", "not_before": "2026-10-10",
@@ -67,7 +67,7 @@ python -m sarcade.licensing.issue init-root --id R-2026 --out root.key
 #   affiche la clé publique à ajouter dans roots.py (par une PR)
 python -m sarcade.licensing.issue new-key --root root.key --root-id R-2026 --id K-2026-1 --years 3 --out licence-key.key
 python -m sarcade.licensing.issue sign --key licence-key.key --organisation "ADRASEC 78" --kind association \
-    --modules siem,locate,assist --out adrasec78.licence.json
+    --modules siem,assist --out adrasec78.licence.json
 python -m sarcade.licensing.issue verify adrasec78.licence.json
 ```
 

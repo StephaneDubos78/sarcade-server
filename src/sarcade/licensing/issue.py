@@ -9,7 +9,7 @@ conversation.
     python -m sarcade.licensing.issue new-key --root root.key --root-id R-2026 \\
         --id K-2026-1 --years 3 --out licence-key.key
     python -m sarcade.licensing.issue sign --key licence-key.key \\
-        --organisation "ADRASEC 78" --kind association --modules siem,locate,assist \\
+        --organisation "ADRASEC 78" --kind association --modules siem,assist \\
         --out adrasec78.licence.json
     python -m sarcade.licensing.issue verify adrasec78.licence.json
 
