@@ -23,9 +23,9 @@ set -eu
 
 [ -f /etc/sarcade/updater.env ] && . /etc/sarcade/updater.env
 URL="${SARCADE_URL:-http://localhost:8000}/api/v0.1"
-IMAGE="ghcr.io/stephanedubos78/sarcade-server"
+IMAGE="ghcr.io/sdubos-consulting/sarcade-server"
 BACKUP_DIR="${SARCADE_BACKUP_DIR:-/var/backups/sarcade}"
-IDENTITY="^https://github.com/StephaneDubos78/sarcade-server/.github/workflows/image.yml@refs/tags/v"
+IDENTITY="^https://github.com/sdubos-consulting/sarcade-server/.github/workflows/image.yml@refs/tags/v"
 ISSUER="https://token.actions.githubusercontent.com"
 AUTH="Authorization: Bearer ${SARCADE_ADMIN_TOKEN:?SARCADE_ADMIN_TOKEN missing}"
 OFFLINE=""

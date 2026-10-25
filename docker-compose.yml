@@ -23,7 +23,7 @@ services:
   server:
     # Signed image published on ghcr.io (docker/updater.sh installs the new
     # versions in the maintenance windows); built locally when absent.
-    image: ghcr.io/stephanedubos78/sarcade-server:${SARCADE_IMAGE_TAG:-edge}
+    image: ghcr.io/sdubos-consulting/sarcade-server:${SARCADE_IMAGE_TAG:-edge}
     build: .
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sarcade}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-sarcade}
