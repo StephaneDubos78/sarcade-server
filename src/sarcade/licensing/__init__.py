@@ -1,6 +1,6 @@
 """SARCADE Pro modules (note 11 « Architecture modulaire et SARCADE Pro »).
 
-The Pro modules (``siem``, ``locate``, ``assist``) are enabled by a signed
+The Pro modules (``siem``, ``assist``) are enabled by a signed
 licence file verified offline (``core.py``); the code stays open source
 (AGPL) and Core never depends on a licence. The licence is checked at start
 and every day; the administrator uploads it in the administration tool.

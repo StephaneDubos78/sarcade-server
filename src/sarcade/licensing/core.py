@@ -37,7 +37,9 @@ from .revoked import REVOKED_KEYS, REVOKED_LICENCES
 from .roots import ROOT_KEYS
 
 FORMAT = "sarcade-licence/1"
-MODULES = ("siem", "locate", "assist")
+# Locate was removed on 25 October 2026 (ADR-006, amendment): beacon search,
+# SDR and 406 MHz are Core. An older licence naming it simply ignores it.
+MODULES = ("siem", "assist")
 KINDS = ("standard", "association", "test")
 GRACE_DAYS = 30
 WARN_DAYS = 30
