@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -26,14 +27,55 @@ from sarcade.messages import attachments as msg_attachments
 
 from .deps import get_db
 from . import operations as event_ops
+from . import groups as groups_api
+from . import aprs as aprs_api
+from . import weather as weather_api
+from . import routes as routes_api
+from . import navigation as navigation_api
+from . import basemaps as basemaps_api
+from sarcade.weather import service as weather_service
+from sarcade.aprs import links as aprs_links
+from sarcade.aprs import service as aprs_service
+from sarcade.groups import service as groups
 from . import access as access_api
 from sarcade.access import logbook as access_logbook
 from sarcade.access.verify import AccessMiddleware, identity_of
 
 log = logging.getLogger("sarcade.sync")
 
-app = FastAPI(title="SARCADE Server", version="0.1.0-dev")
+_background_tasks: list = []
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    aprs_links.start(_background_tasks)
+    weather_service.start(_background_tasks)
+    navigation_api.start(_background_tasks)
+    yield
+    for task in _background_tasks:
+        task.cancel()
+
+
+app = FastAPI(title="SARCADE Server", version="0.1.0-dev", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def no_store_for_api(request, call_next):
+    """API answers are live data: no cache, browser or proxy, may keep them.
+    A Cloudflare cache rule once kept the change feed for hours and clients
+    stopped seeing new messages (25 October 2026)."""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/") or request.url.path == "/health":
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
 app.include_router(event_ops.router)
+app.include_router(groups_api.router)
+app.include_router(aprs_api.router)
+app.include_router(weather_api.router)
+app.include_router(routes_api.router)
+app.include_router(navigation_api.router)
+app.include_router(basemaps_api.router)
 app.include_router(access_api.router)
 # Server-side check of the Cloudflare Access token (off unless configured).
 app.add_middleware(AccessMiddleware)
@@ -46,9 +88,15 @@ def health():
 
 @app.post("/api/v0.1/events", response_model=EventOut, status_code=201)
 def create_event(payload: EventCreate, db: Session = Depends(get_db)):
+    now = datetime.now(UTC)
     row = EventRow(id=str(uuid.uuid4()), name=payload.name, kind=payload.kind, summary=payload.summary,
-                   status="draft", created_at=datetime.now(UTC), version=0)
-    db.add(row); db.commit(); db.refresh(row)
+                   status="draft", created_at=now, version=0)
+    db.add(row); db.flush()
+    # ADRASEC default groups, created when the event opens (10 Oct 2026).
+    groups_api.ensure_groups(db, row.id, groups.default_groups(row.id, now), now)
+    db.add(LogbookRow(event_id=row.id, kind="group", object_id=None, actor_id="PCO", time=now,
+                      summary="Groupes par défaut ADRASEC créés"))
+    db.commit(); db.refresh(row)
     return row
 
 
@@ -57,7 +105,10 @@ def create_team(event_id: str, payload: TeamCreate, db: Session = Depends(get_db
     if db.get(EventRow, event_id) is None:
         raise HTTPException(status_code=404, detail="event_not_found")
     row = TeamRow(id=str(uuid.uuid4()), event_id=event_id, name=payload.name)
-    db.add(row); db.commit(); db.refresh(row)
+    db.add(row); db.flush()
+    now = datetime.now(UTC)
+    groups_api.ensure_groups(db, event_id, [groups.team_group(event_id, row.id, row.name, now)], now)
+    db.commit(); db.refresh(row)
     return row
 
 
@@ -72,9 +123,11 @@ async def ingest_position(payload: PositionCreate, db: Session = Depends(get_db)
         accuracy_m=payload.accuracy_m, heading_deg=payload.heading_deg,
         speed_mps=payload.speed_mps, time=payload.time, battery_pct=payload.battery_pct, source="device")
     db.add(row)
-    event_ops.touch_device(db, payload.event_id, payload.device_id, datetime.now(UTC),
-                            position_time=payload.time, battery_pct=payload.battery_pct)
+    device = event_ops.touch_device(db, payload.event_id, payload.device_id, datetime.now(UTC),
+                                    position_time=payload.time, battery_pct=payload.battery_pct)
     db.commit(); db.refresh(row)
+    aprs_service.queue_transmission(db.get(EventRow, payload.event_id).settings, device,
+                                    payload.lat, payload.lon, datetime.now(UTC))
     data = position_dict(row)
     await manager.broadcast(payload.event_id, {"type": "position.updated", "data": data})
     return {"status": "accepted", "id": payload.id}
@@ -408,11 +461,17 @@ class SyncRejected(Exception):
         self.reason = reason
 
 
-def _apply_operation(db: Session, op: SyncOperationIn, now: datetime) -> tuple[str, int, dict | None]:
+def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
+                     notices: dict | None = None) -> tuple[str, int, dict | None]:
     """Applies one synchronised operation. Raises SyncRejected (or a data
     error) when it cannot be applied; the caller isolates it in a savepoint."""
+    if op.object_type in routes_api.SYNC_TYPES:
+        batch = (notices if notices is not None else {}).setdefault(op.event_id, routes_api.Notices())
+        return routes_api.apply_route_object(db, op, now, batch)
     if op.object_type == "map_feature":
         return _apply_map_feature(db, op, now)
+    if op.object_type == "comm_group":
+        return groups_api.apply_group(db, op, now)
     if op.object_type not in VALID_TYPES:
         raise SyncRejected(f"type d'élément inconnu : {op.object_type}")
     if op.object_type == "message" and op.action == "create":
@@ -420,6 +479,9 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime) -> tuple[s
             op.payload["attachments"] = msg_attachments.clean_attachments(op.payload.get("attachments"))
         except ValueError:
             raise SyncRejected("pièces jointes invalides")
+        if not groups_api.message_allowed(db, op.event_id, op.payload.get("sender_id", ""),
+                                          op.payload.get("recipient_ids")):
+            raise SyncRejected("envoi non autorisé dans ce groupe (écoute seule)")
     p = op.payload
     if op.object_type == "ack" and op.action == "create" and db.get(AckRow, op.object_id) is None:
         if db.get(MessageRow, p.get("message_id")) is None:
@@ -441,8 +503,11 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime) -> tuple[s
             battery_pct=event_ops.clean_battery(p.get("battery_pct")), source="device",
         )
         db.add(row); db.flush()
-        event_ops.touch_device(db, op.event_id, p["device_id"], now,
-                                position_time=row.time, battery_pct=row.battery_pct)
+        device = event_ops.touch_device(db, op.event_id, p["device_id"], now,
+                                        position_time=row.time, battery_pct=row.battery_pct)
+        event = db.get(EventRow, op.event_id)
+        if event is not None:
+            aprs_service.queue_transmission(event.settings, device, p["lat"], p["lon"], now)
         return status, cursor, {"type": "position.updated", "data": p}
     if op.object_type == "poi" and db.get(POIRow, op.object_id) is None:
         row = POIRow(
@@ -474,7 +539,10 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime) -> tuple[s
     return status, cursor, None
 
 
-_MAP_FEATURE_REASONS = {"rejected": "objet cartographique invalide"}
+
+
+_REJECT_REASONS = {"route": "route invalide ou non autorisée", "route_waypoint": "point de passage invalide",
+                   "route_passage": "passage invalide", "map_feature": "objet cartographique invalide", "comm_group": "groupe invalide ou non autorisé"}
 
 
 def _sync_result(operation_id: str, status: str, cursor: int = 0, reason: str | None = None) -> dict:
@@ -498,6 +566,7 @@ async def synchronize(operations: list[dict], request: Request, db: Session = De
     known_events: dict[str, bool] = {}
     identity = identity_of(request)
     seen_actors: set[tuple[str, str]] = set()
+    notices: dict[str, routes_api.Notices] = {}
     for raw in operations:
         operation_id = str(raw.get("operation_id") or "")[:64] if isinstance(raw, dict) else ""
         try:
@@ -514,7 +583,7 @@ async def synchronize(operations: list[dict], request: Request, db: Session = De
         now = datetime.now(UTC)
         try:
             with db.begin_nested():
-                status, cursor, message = _apply_operation(db, op, now)
+                status, cursor, message = _apply_operation(db, op, now, notices)
         except SyncRejected as exc:
             results.append(_sync_result(op.operation_id, "rejected", reason=exc.reason))
             continue
@@ -533,8 +602,11 @@ async def synchronize(operations: list[dict], request: Request, db: Session = De
             if actor and (op.event_id, actor) not in seen_actors:
                 seen_actors.add((op.event_id, actor))
                 access_logbook.record_access(db, op.event_id, actor, identity, now)
-        reason = _MAP_FEATURE_REASONS.get(status) if op.object_type == "map_feature" else None
+        reason = _REJECT_REASONS.get(op.object_type) if status == "rejected" else None
         results.append(_sync_result(op.operation_id, status, cursor, reason))
+    for event_id, batch in notices.items():
+        for payload in routes_api.flush_notices(db, event_id, batch, datetime.now(UTC)):
+            broadcasts.append((event_id, payload))
     db.commit()
     for event_id, payload in broadcasts:
         await manager.broadcast(event_id, payload)
