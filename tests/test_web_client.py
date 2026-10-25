@@ -38,6 +38,6 @@ def test_serves_client_and_keeps_api(tmp_path):
     assert root.headers["cache-control"] == "no-cache"
     asset = client.get("/main.dart.js")
     assert asset.status_code == 200
-    assert "cache-control" not in asset.headers
+    assert asset.headers["cache-control"] == "no-cache"
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/missing.js").status_code == 404
