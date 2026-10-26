@@ -16,6 +16,8 @@ Les deux entrées sont **fusionnées et dédoublonnées** : un même paquet (ém
 
 Décodage : positions non compressées et compressées (avec ou sans horodatage), **Mic-E** (la plupart des postes mobiles), objets, trafic tiers. Vérifié contre la bibliothèque aprslib sur près de 3 000 trames.
 
+Serveur APRS-IS réglable dans l'**outil d'administration** (jeton d'administration) : `PATCH /api/v0.1/admin/settings` avec `{"settings":{"aprs":{"is_host":"euro.aprs2.net","is_port":14580}}}`. Ordre de priorité : réglage d'administration, puis `SARCADE_APRS_IS_HOST` / `SARCADE_APRS_IS_PORT` du `.env`, puis `euro.aprs2.net:14580`. Un changement est appliqué sans redémarrage (reconnexion dans la minute) et inscrit au journal de sécurité ; `null` ou vide revient au `.env`.
+
 ## Groupes d'indicatifs
 - `GET/POST /api/v0.1/aprs/groups`, `PUT/DELETE /api/v0.1/aprs/groups/{id}` (nom, indicatifs) : créés par l'administrateur de l'organisation.
 - Un indicatif sans SSID couvre **tous ses SSID** (F4JPO couvre F4JPO-7, F4JPO-9…) ; avec SSID, seulement cette station.

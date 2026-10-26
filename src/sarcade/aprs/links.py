@@ -56,14 +56,34 @@ def _current_filter() -> str:
         db.close()
 
 
+DEFAULT_IS_HOST, DEFAULT_IS_PORT = "euro.aprs2.net", 14580
+
+
+def is_server(admin: dict | None = None) -> tuple[str, int]:
+    """APRS-IS server: administration setting first (« aprs » of
+    /admin/settings), else SARCADE_APRS_IS_HOST / _PORT, else euro.aprs2.net."""
+    if admin is None:
+        from sarcade.updates.service import admin_settings
+        db = SessionLocal()
+        try:
+            admin = admin_settings(db)
+        except Exception:  # noqa: BLE001 - table not ready: fall back on the .env
+            admin = {}
+        finally:
+            db.close()
+    a = (admin or {}).get("aprs") or {}
+    host = a.get("is_host") or os.getenv("SARCADE_APRS_IS_HOST") or DEFAULT_IS_HOST
+    port = a.get("is_port") or int(os.getenv("SARCADE_APRS_IS_PORT") or DEFAULT_IS_PORT)
+    return host, int(port)
+
+
 async def aprs_is_loop() -> None:
-    host = os.getenv("SARCADE_APRS_IS_HOST", "euro.aprs2.net")
-    port = int(os.getenv("SARCADE_APRS_IS_PORT", "14580"))
     login = server_callsign() or "N0CALL"
     runtime.aprs_is.enabled = True
     backoff = 5
     while True:
         try:
+            host, port = await asyncio.to_thread(is_server)
             current = await asyncio.to_thread(_current_filter)
             reader, writer = await asyncio.open_connection(host, port)
             writer.write(f"user {login} pass -1 vers SARCADE 0.1 filter {current}\r\n".encode())
@@ -80,6 +100,11 @@ async def aprs_is_loop() -> None:
                 if loop.time() >= next_check:
                     next_check = loop.time() + 60
                     wanted = await asyncio.to_thread(_current_filter)
+                    # Server changed in the administration: reconnect at once.
+                    if await asyncio.to_thread(is_server) != (host, port):
+                        writer.close()
+                        backoff = 1
+                        raise ConnectionError("server_changed")
                     if wanted != current:
                         writer.write(f"#filter {wanted}\r\n".encode())
                         await writer.drain()

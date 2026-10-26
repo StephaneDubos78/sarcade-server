@@ -16,9 +16,13 @@ DEFAULTS = {
     # Navigation level 1 (decision of 10 Oct 2026): application opened
     # directly by « Open in… », and hiding of the apps that send data.
     "navigation": {"app": "operator", "hide_tracking_apps": False},
+    # APRS-IS server (decision of 26 Oct 2026): empty = SARCADE_APRS_IS_HOST
+    # / SARCADE_APRS_IS_PORT of the .env, else euro.aprs2.net:14580.
+    "aprs": {"is_host": None, "is_port": None},
 }
 NAVIGATION_APPS = ("operator", "organic_maps", "osmand", "apple_maps", "google_maps", "waze")
 TRACKING_APPS = ("google_maps", "waze")
+_HOST = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$")
 _HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _VERSION = re.compile(r"^v?\d+(\.\d+){0,3}([-+][0-9A-Za-z.\-+]*)?$")
 
@@ -101,6 +105,18 @@ def validate(settings: dict) -> dict:
     if hide and app in TRACKING_APPS:
         raise InvalidSettings("navigation_app_hidden")
     out["navigation"] = {"app": app, "hide_tracking_apps": hide}
+    a = settings.get("aprs", {}) or {}
+    if not isinstance(a, dict):
+        raise InvalidSettings("invalid_aprs")
+    host = a.get("is_host")
+    if isinstance(host, str):
+        host = host.strip() or None
+    if host is not None and (not isinstance(host, str) or not _HOST.match(host)):
+        raise InvalidSettings("invalid_aprs_is_host")
+    port = a.get("is_port")
+    if port is not None and (isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535):
+        raise InvalidSettings("invalid_aprs_is_port")
+    out["aprs"] = {"is_host": host, "is_port": port}
     return out
 
 
