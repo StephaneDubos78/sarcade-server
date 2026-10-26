@@ -364,7 +364,11 @@ async def event_websocket(websocket: WebSocket, event_id: str):
     await manager.connect(event_id, websocket)
     try:
         while True:
-            await websocket.receive_text()
+            # « ping » from the clients every 30 s: the answer proves the
+            # channel is alive end to end (a connection can stay open on the
+            # client side behind a proxy while it is dead on the server side).
+            if (await websocket.receive_text()).strip() == "ping":
+                await websocket.send_json({"type": "pong", "data": {}})
     except WebSocketDisconnect:
         manager.disconnect(event_id, websocket)
 
