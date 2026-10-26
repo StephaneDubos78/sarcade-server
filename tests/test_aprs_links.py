@@ -87,3 +87,13 @@ def test_kiss_receive_and_transmit(monkeypatch):
     assert received == [("F4JPO-9>APRS,WIDE1-1:!4903.50N/00201.75E>", "rf")]
     frames = kiss.KissDecoder().feed(bytes(sent))
     assert kiss.ax25_to_tnc2(frames[0]) == "F6KRK>APZSAR:;TEST", "queued frame reaches the modem"
+
+
+def test_login_never_n0call(monkeypatch):
+    monkeypatch.delenv("SARCADE_APRS_IS_LOGIN", raising=False)
+    monkeypatch.setenv("SARCADE_APRS_CALLSIGN", "")
+    assert links.is_login() == ""
+    monkeypatch.setenv("SARCADE_APRS_CALLSIGN", "F6KRK")
+    assert links.is_login() == "F6KRK"
+    monkeypatch.setenv("SARCADE_APRS_IS_LOGIN", "f4jpo-sc")
+    assert links.is_login() == "F4JPO-SC"
