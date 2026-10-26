@@ -3,7 +3,7 @@
 Configuration (environment):
 
 * ``SARCADE_APRS_IS=1`` enables APRS-IS; ``SARCADE_APRS_IS_HOST`` /
-  ``SARCADE_APRS_IS_PORT`` (default ``rotate.aprs2.net:14580``). The login is
+  ``SARCADE_APRS_IS_PORT`` (default ``euro.aprs2.net:14580``). The login is
   read-only (passcode -1): the server never sends to APRS-IS.
 * ``SARCADE_KISS_HOST`` / ``SARCADE_KISS_PORT`` (default port 8001) enable
   the radio link to a software modem such as Dire Wolf.
@@ -57,7 +57,7 @@ def _current_filter() -> str:
 
 
 async def aprs_is_loop() -> None:
-    host = os.getenv("SARCADE_APRS_IS_HOST", "rotate.aprs2.net")
+    host = os.getenv("SARCADE_APRS_IS_HOST", "euro.aprs2.net")
     port = int(os.getenv("SARCADE_APRS_IS_PORT", "14580"))
     login = server_callsign() or "N0CALL"
     runtime.aprs_is.enabled = True
