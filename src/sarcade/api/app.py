@@ -404,6 +404,12 @@ def _apply_map_feature(db: Session, op, now: datetime) -> tuple[str, int, dict |
     if row is not None and row.event_id != op.event_id:
         journal.status = "rejected"
         return "rejected", 0, None
+    # A bearing is changed or deleted by its author or the PCO only
+    # (note « Relevés et croisements », decision 5).
+    if row is not None and row.kind == "bearing" and change["updated_by"] != row.created_by \
+            and not groups.is_pco(change["updated_by"]):
+        journal.status = "rejected"
+        return "rejected", 0, None
     decision = features.decide(op.action, change, row)
     if decision.status != "accepted":
         journal.status = "conflict"
@@ -427,7 +433,8 @@ def _apply_map_feature(db: Session, op, now: datetime) -> tuple[str, int, dict |
             db.add(row)
             logbook_action = "create"
         else:
-            logbook_action = "restore" if was_deleted else None
+            # Every change of a bearing goes to the logbook (decision 5).
+            logbook_action = "restore" if was_deleted else ("update" if change["kind"] == "bearing" else None)
         row.kind = change["kind"]
         row.data = data
         row.geom = WKTElement(features.geometry_wkt(change), srid=4326)
