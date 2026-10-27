@@ -38,6 +38,7 @@ from sarcade.aprs import links as aprs_links
 from sarcade.aprs import service as aprs_service
 from sarcade.groups import service as groups
 from . import access as access_api
+from . import geocode as geocode_api
 
 log = logging.getLogger("sarcade.sync")
 
@@ -75,6 +76,7 @@ app.include_router(routes_api.router)
 app.include_router(navigation_api.router)
 app.include_router(basemaps_api.router)
 app.include_router(access_api.router)
+app.include_router(geocode_api.router)
 
 
 @app.get("/health")
