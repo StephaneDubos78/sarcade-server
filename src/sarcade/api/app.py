@@ -40,6 +40,7 @@ from sarcade.groups import service as groups
 from . import access as access_api
 from sarcade.access import logbook as access_logbook
 from sarcade.access.verify import AccessMiddleware, identity_of
+from . import geocode as geocode_api
 
 log = logging.getLogger("sarcade.sync")
 
@@ -79,6 +80,7 @@ app.include_router(basemaps_api.router)
 app.include_router(access_api.router)
 # Server-side check of the Cloudflare Access token (off unless configured).
 app.add_middleware(AccessMiddleware)
+app.include_router(geocode_api.router)
 
 
 @app.get("/health")
@@ -368,7 +370,11 @@ async def event_websocket(websocket: WebSocket, event_id: str):
     await manager.connect(event_id, websocket)
     try:
         while True:
-            await websocket.receive_text()
+            # « ping » from the clients every 30 s: the answer proves the
+            # channel is alive end to end (a connection can stay open on the
+            # client side behind a proxy while it is dead on the server side).
+            if (await websocket.receive_text()).strip() == "ping":
+                await websocket.send_json({"type": "pong", "data": {}})
     except WebSocketDisconnect:
         manager.disconnect(event_id, websocket)
 
@@ -404,6 +410,12 @@ def _apply_map_feature(db: Session, op, now: datetime) -> tuple[str, int, dict |
     if row is not None and row.event_id != op.event_id:
         journal.status = "rejected"
         return "rejected", 0, None
+    # A bearing is changed or deleted by its author or the PCO only
+    # (note « Relevés et croisements », decision 5).
+    if row is not None and row.kind == "bearing" and change["updated_by"] != row.created_by \
+            and not groups.is_pco(change["updated_by"]):
+        journal.status = "rejected"
+        return "rejected", 0, None
     decision = features.decide(op.action, change, row)
     if decision.status != "accepted":
         journal.status = "conflict"
@@ -427,7 +439,8 @@ def _apply_map_feature(db: Session, op, now: datetime) -> tuple[str, int, dict |
             db.add(row)
             logbook_action = "create"
         else:
-            logbook_action = "restore" if was_deleted else None
+            # Every change of a bearing goes to the logbook (decision 5).
+            logbook_action = "restore" if was_deleted else ("update" if change["kind"] == "bearing" else None)
         row.kind = change["kind"]
         row.data = data
         row.geom = WKTElement(features.geometry_wkt(change), srid=4326)

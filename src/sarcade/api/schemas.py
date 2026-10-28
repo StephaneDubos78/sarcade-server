@@ -42,6 +42,9 @@ class PositionCreate(BaseModel):
 
 class PositionOut(PositionCreate):
     source: str = "device"
+    aprs_via: str | None = None
+    aprs_symbol: str | None = None
+    aprs_path: str | None = None
 
 
 class POICreate(BaseModel):
