@@ -25,6 +25,14 @@ services:
       SARCADE_VIGILANCE_URL: http://services-stub:8080/vigilance
       SARCADE_METEOFRANCE_API_KEY: demo
       SARCADE_VALHALLA_URL: http://services-stub:8080
+      # Updates and security: releases API and SIEM collector stand-ins.
+      SARCADE_RELEASES_URL: http://services-stub:8080/releases/latest
+      SARCADE_ADMIN_TOKEN: demo-admin-token
+      SARCADE_SERVER_ID: sarcade-demo
+      SARCADE_PRO_MODULES: siem
+      SARCADE_SIEM_HOST: services-stub
+      SARCADE_SIEM_PORT: "6514"
+      SARCADE_SIEM_TLS: "0"
     ports:
       - "8000:8000"
     volumes:
