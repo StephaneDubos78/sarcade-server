@@ -7,6 +7,8 @@ Configuration (environment):
   read-only (passcode -1): the server never sends to APRS-IS.
 * ``SARCADE_KISS_HOST`` / ``SARCADE_KISS_PORT`` (default port 8001) enable
   the radio link to a software modem such as Dire Wolf.
+* ``SARCADE_APRS_IS_LOGIN``: callsign of the read-only APRS-IS login (else
+  ``SARCADE_APRS_CALLSIGN``); required, N0CALL is refused by the servers.
 * ``SARCADE_APRS_CALLSIGN``: ADRASEC callsign, required to transmit on radio.
 """
 from __future__ import annotations
@@ -56,19 +58,34 @@ def _current_filter() -> str:
         db.close()
 
 
+def is_login() -> str:
+    """Callsign the server logs in with on APRS-IS (read-only, « pass -1 »,
+    reported « unverified »): SARCADE_APRS_IS_LOGIN, else the ADRASEC
+    callsign SARCADE_APRS_CALLSIGN. Never N0CALL, refused by the servers."""
+    return (os.getenv("SARCADE_APRS_IS_LOGIN") or "").strip().upper() or server_callsign()
+
+
 async def aprs_is_loop() -> None:
     host = os.getenv("SARCADE_APRS_IS_HOST", "rotate.aprs2.net")
     port = int(os.getenv("SARCADE_APRS_IS_PORT", "14580"))
-    login = server_callsign() or "N0CALL"
     runtime.aprs_is.enabled = True
     backoff = 5
     while True:
+        login = is_login()
+        if not login:
+            # APRS-IS servers close the connection of N0CALL (NAS test of
+            # 26 Oct 2026): a real callsign is required, even read-only.
+            runtime.aprs_is.connected, runtime.aprs_is.detail = False, "login_missing: SARCADE_APRS_IS_LOGIN"
+            await asyncio.sleep(60)
+            continue
         try:
             current = await asyncio.to_thread(_current_filter)
             reader, writer = await asyncio.open_connection(host, port)
             writer.write(f"user {login} pass -1 vers SARCADE 0.1 filter {current}\r\n".encode())
             await writer.drain()
-            runtime.aprs_is.connected, runtime.aprs_is.detail = True, f"{host}:{port}"
+            # Connected only once the server answered the login (« # logresp »)
+            # or sent a packet: a refused login closes before that.
+            runtime.aprs_is.connected, runtime.aprs_is.detail = False, f"{host}:{port} (login {login}…)"
             runtime.filter = current
             backoff = 5
             loop = asyncio.get_running_loop()
@@ -85,12 +102,17 @@ async def aprs_is_loop() -> None:
                         await writer.drain()
                         current = runtime.filter = wanted
                 line = raw.decode("utf-8", "replace").strip()
+                if not runtime.aprs_is.connected and (line.startswith("# logresp") or (line and not line.startswith("#"))):
+                    runtime.aprs_is.connected, runtime.aprs_is.detail = True, f"{host}:{port} ({login})"
                 if line and not line.startswith("#"):
                     await handle_line(line, "is")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - keep retrying, never crash the server
-            runtime.aprs_is.connected, runtime.aprs_is.detail = False, str(exc) or type(exc).__name__
+            reason = str(exc) or type(exc).__name__
+            if reason == "closed" and not runtime.aprs_is.connected:
+                reason = f"login_refused ({login})"
+            runtime.aprs_is.connected, runtime.aprs_is.detail = False, reason
             log.warning("APRS-IS link down: %s", runtime.aprs_is.detail)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 300)
