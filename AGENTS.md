@@ -22,6 +22,16 @@ python -m pytest -q              # tests unitaires (SQLite, rapides)
 ```
 La CI (`.github/workflows/ci.yml`) lance aussi `demo-integration` : PostGIS + serveur en Docker, puis les scripts `demo/verify_*.py` (un par fonction : APRS, groupes, réveil, HTTPS…). Ajouter un `verify_*.py` pour toute nouvelle API.
 
+## Travail à plusieurs assistants (Claude et ChatGPT en parallèle)
+Décision du porteur, 28 octobre 2026, 23 h 10.
+1. **Un sujet = un assistant.** Prendre une carte la passe en « En cours » du Kanban avec l'étiquette `#claude` ou `#chatgpt` ; une carte étiquetée par l'autre ne se touche pas. Le porteur attribue les cartes.
+2. **Branches préfixées** `claude/…` ou `chatgpt/…`, une PR par sujet, branche remise à jour depuis `main` avant la PR et après chaque fusion.
+3. **Zones séparées** autant que possible (par dépôt ou par écran) ; `lib/src/features/map/operational_map_page.dart` est le fichier le plus exposé aux conflits : y faire des modifications courtes, ou extraire d'abord le code concerné dans un fichier à part.
+4. **Ressources numérotées réservées** sur la carte avant écriture : numéro de migration Alembic, ajout de dépendance (`uv.lock`, `pubspec.lock`) — un seul à la fois.
+5. **Une seule IA fusionne : Claude** (décision du porteur, 28 octobre 2026, 23 h 15), après accord du porteur, une PR à la fois, CI verte, y compris les PR de ChatGPT. **ChatGPT ne fusionne jamais** : il ouvre ses PR et les signale au porteur.
+7. **Découpage** (23 h 15) : Claude = serveur (dont toutes les migrations), Paramètres, structure de l'application (rail, onglets, démarrage, pastille des liaisons) ; ChatGPT = carte et relevés (signal recherché, sélection, édition graphique, filtres, couches, couleurs des opérateurs, favoris dans Équipes, liste par fraîcheur). Messages, Fichiers, Météo, Itinéraires : au premier libre, sur attribution du porteur.
+6. **Coffre partagé** : `git pull` juste avant d'écrire, petit commit juste après ; section « Qui fait quoi » dans la note de reprise.
+
 ## Pièges connus
 - **Migrations Alembic** dans `migrations/versions/`, numérotées `00NN_*.py` en chaîne stricte. Avant de créer une migration, vérifier le dernier numéro sur `main` (deux branches ont déjà créé la même 0015).
 - **Dépendances** : `uv.lock` est figé (l'image Docker installe avec hachages). Toute dépendance ajoutée dans `pyproject.toml` impose `uv lock` (un oubli a cassé l'image le 28 octobre 2026).
