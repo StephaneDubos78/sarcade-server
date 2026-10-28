@@ -63,6 +63,8 @@ class PositionRow(Base):
     # ("F4JPO-10*,WIDE1-1,qAR,F4JPO-10"), shown in the station sheet.
     aprs_symbol: Mapped[str | None] = mapped_column(String(2))
     aprs_path: Mapped[str | None] = mapped_column(String(160))
+    # APRS only: callsign heard (F4JPO-5), shown even when linked to a terminal.
+    aprs_callsign: Mapped[str | None] = mapped_column(String(12))
 
 
 class POIRow(Base):

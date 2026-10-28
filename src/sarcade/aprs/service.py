@@ -126,6 +126,7 @@ def ingest(db: Session, line: str, via: str, now: datetime, dedup: Deduplicator 
             alt_m=pos.alt_m, accuracy_m=None, heading_deg=(pos.course_deg % 360) if pos.course_deg else None,
             speed_mps=pos.speed_mps, time=now, source="aprs", aprs_via=via,
             aprs_symbol=(pos.symbol or None) and pos.symbol[:2], aprs_path=path[:160] or None,
+            aprs_callsign=pos.callsign[:12],
         )
         db.add(row)
         if device is not None and (device.last_position_at is None or now > device.last_position_at):

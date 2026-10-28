@@ -45,6 +45,7 @@ class PositionOut(PositionCreate):
     aprs_via: str | None = None
     aprs_symbol: str | None = None
     aprs_path: str | None = None
+    callsign: str | None = None
 
 
 class POICreate(BaseModel):
