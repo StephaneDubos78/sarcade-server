@@ -57,6 +57,9 @@ check(push("rf", "F4JPO-9>APRS::F1ABC    :Bonjour")["stored"] == 0, "non-positio
 latest = {p["device_id"]: p for p in c.get(f"{E}/positions/latest").json()}
 check(set(latest) == {"TEL-01", "aprs:F5XYZ"}, "only selected stations have positions")
 check(latest["TEL-01"]["source"] == "aprs", "F4JPO's APRS position attaches to his SARCADE device")
+check(latest["TEL-01"]["aprs_symbol"] == "/>" and latest["TEL-01"]["aprs_path"] == "WIDE1-1"
+      and latest["TEL-01"]["aprs_via"] == "rf", "APRS symbol, path and channel kept with the position")
+check(latest["aprs:F5XYZ"]["aprs_via"] == "is", "APRS-IS channel kept")
 devices = {d["device_id"]: d for d in c.get(f"{E}/devices").json()}
 check(devices["TEL-01"]["callsign"] == "F4JPO" and devices["TEL-01"]["last_position_at"],
       "the device shows its callsign and last position")

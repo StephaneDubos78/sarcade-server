@@ -11,6 +11,7 @@ def position_dict(row: PositionRow) -> dict:
         "accuracy_m": row.accuracy_m, "heading_deg": row.heading_deg,
         "speed_mps": row.speed_mps, "time": row.time,
         "battery_pct": row.battery_pct, "source": row.source or "device",
+        "aprs_via": row.aprs_via, "aprs_symbol": row.aprs_symbol, "aprs_path": row.aprs_path,
     }
 
 
