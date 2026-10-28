@@ -33,6 +33,8 @@ class RoutingIn(BaseModel):
     event_id: str | None = Field(default=None, max_length=64)
     points: list[list[float]] = Field(min_length=2, max_length=25)
     mode: str = Field(pattern="^(car|foot|offroad)$")
+    # Up to two variants, shown in grey on the map (decision of 10 Oct 2026).
+    alternatives: int = Field(default=0, ge=0, le=2)
 
 
 def closures(db, event_id: str | None) -> list[list[list[float]]]:
@@ -57,13 +59,15 @@ async def compute_itinerary(payload: RoutingIn):
     finally:
         db.close()
     try:
-        result = await valhalla.route(payload.points, payload.mode, closed)
+        result = await valhalla.route(payload.points, payload.mode, closed, alternatives=payload.alternatives)
     except valhalla.NoRoute:
         raise HTTPException(status_code=422, detail="no_route")
     except valhalla.RoutingUnavailable:
         raise HTTPException(status_code=503, detail="routing_unavailable")
     result["mode"] = payload.mode
     result["avoided_closures"] = len(closed)
+    for alt in result.get("alternatives", []):
+        alt["mode"] = payload.mode
     return result
 
 
