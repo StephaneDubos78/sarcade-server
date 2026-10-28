@@ -109,4 +109,25 @@ check(log == ["Objet cartographique créé : Zone « Secteur A »",
               "Objet cartographique supprimé : Zone « Secteur A Nord »",
               "Objet cartographique restauré : Zone « Secteur A Nord »"], "logbook: create, delete, restore")
 
+# Bearings (note « Relevés et croisements »): author or PCO only, every change in the logbook.
+bid = str(uuid.uuid4())
+
+
+def bearing(at, by, az):
+    return {"operation_id": str(uuid.uuid4()), "event_id": event, "object_id": bid, "object_type": "map_feature",
+            "action": "create", "client_time": iso(T0), "payload": {
+                "id": bid, "event_id": event, "kind": "bearing", "points": [[48.80, 2.10]], "color": 0xFF3DD6F5,
+                "stroke_width": 2, "label": "", "created_by": "ADR78-01", "updated_by": by, "updated_at": iso(at),
+                "bearing": {"azimuth_deg": az, "strength": 7, "target": "121,500 MHz", "method": "compass"}}}
+
+
+check(sync(bearing(T0, "ADR78-01", 38)) == ["accepted"], "bearing created by its author")
+check(sync(bearing(T0 + timedelta(minutes=1), "ADR78-02", 40)) == ["rejected"], "another operator cannot change it")
+check(sync(bearing(T0 + timedelta(minutes=2), "PCO", 41)) == ["accepted"], "the PCO can change it")
+b = next(f for f in listing() if f["id"] == bid)
+check(b["bearing"]["azimuth_deg"] == 41 and b["bearing"]["cone_deg"] == 5 and b["bearing"]["length_m"] == 10000,
+      "bearing details kept, 10 km and ±5° by default")
+log = [x["summary"] for x in c.get(f"{BASE}/api/v0.1/events/{event}/logbook").json() if x["object_id"] == bid]
+check(log == ["Objet cartographique créé : Relevé", "Objet cartographique modifié : Relevé"], "bearing changes in the logbook")
+
 print("PASS: map feature synchronisation follows ADR-001")
