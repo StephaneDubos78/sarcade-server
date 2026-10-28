@@ -35,6 +35,10 @@ services:
       SARCADE_APRS_IS_HOST: ${SARCADE_APRS_IS_HOST:-euro.aprs2.net}
       SARCADE_APRS_IS_PORT: ${SARCADE_APRS_IS_PORT:-14580}
       SARCADE_APRS_IS_LOGIN: ${SARCADE_APRS_IS_LOGIN:-}
+      # Wake-up of the devices (docs/wakeup-v0.1.md): Firebase service account
+      # (JSON content or path of the file, placed by the operator) for Android.
+      SARCADE_FCM_SERVICE_ACCOUNT: ${SARCADE_FCM_SERVICE_ACCOUNT:-}
+      SARCADE_VAPID_SUBJECT: ${SARCADE_VAPID_SUBJECT:-}
       SARCADE_APRS_CALLSIGN: ${SARCADE_APRS_CALLSIGN:-}
       SARCADE_KISS_HOST: ${SARCADE_KISS_HOST:-}
       SARCADE_KISS_PORT: ${SARCADE_KISS_PORT:-8001}

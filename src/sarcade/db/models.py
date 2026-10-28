@@ -321,3 +321,27 @@ class ClientDeviceRow(Base):
     deferred_logged: Mapped[bool] = mapped_column(default=False, nullable=False)
     refused_logged: Mapped[bool] = mapped_column(default=False, nullable=False)
     last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WakeTokenRow(Base):
+    """Wake-up token of a device for an event (note « Réveil des appareils »):
+    FCM registration token, Web Push subscription (JSON) or APNs token."""
+    __tablename__ = "wake_tokens"
+    __table_args__ = (UniqueConstraint("event_id", "device_id", "platform", name="uq_wake_token"),)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    device_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    token: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WakeKeyRow(Base):
+    """Key pairs of the server for the wake-ups (Web Push VAPID), created at
+    first use; never sent by any API."""
+    __tablename__ = "wake_keys"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    private_pem: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

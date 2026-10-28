@@ -69,6 +69,9 @@ jobs:
       - name: Verify communication groups
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_groups.py"
+      - name: Verify the wake-up of the devices
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_wakeup.py"
       - name: Verify sync robustness and the event list
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_sync_robustness.py"

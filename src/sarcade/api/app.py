@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 import hashlib
@@ -45,10 +46,14 @@ from . import access as access_api
 from sarcade.access import logbook as access_logbook
 from sarcade.access.verify import AccessMiddleware, identity_of
 from . import geocode as geocode_api
+from . import wakeup as wakeup_api
+from sarcade.wakeup import service as wakeup_service
 
 log = logging.getLogger("sarcade.sync")
 
 _background_tasks: list = []
+# Wake-ups in flight (kept referenced until done).
+_wake_tasks: set = set()
 
 
 @asynccontextmanager
@@ -90,6 +95,7 @@ app.include_router(access_api.router)
 # Server-side check of the Cloudflare Access token (off unless configured).
 app.add_middleware(AccessMiddleware)
 app.include_router(geocode_api.router)
+app.include_router(wakeup_api.router)
 
 
 @app.get("/health")
@@ -640,6 +646,11 @@ async def synchronize(operations: list[dict], request: Request, db: Session = De
     db.commit()
     for event_id, payload in broadcasts:
         await manager.broadcast(event_id, payload)
+        # Devices with SARCADE closed: woken by a signal without content.
+        if payload.get("type") == "message.created":
+            task = asyncio.create_task(wakeup_service.wake_for_message(event_id, payload.get("data") or {}))
+            _wake_tasks.add(task)
+            task.add_done_callback(_wake_tasks.discard)
     return results
 
 
