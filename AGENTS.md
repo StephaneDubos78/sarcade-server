@@ -3,7 +3,7 @@
 Consignes pour tout assistant de code (Claude, ChatGPT/Codex, autre) qui reprend ce dépôt. À lire avant toute modification.
 
 ## Le projet en bref
-SARCADE coordonne les bénévoles ADRASEC (radioamateurs, sécurité civile) : carte partagée, positions, messages prioritaires, relevés goniométriques, APRS, main courante. Ce dépôt est le **serveur** (FastAPI, PostgreSQL/PostGIS, Alembic). Clients : `sdubos-consulting/sarcade-app` (Flutter). Spécifications et suivi : dépôt privé `sdubos-consulting/sarcade-vault` (coffre Obsidian, dossier `SARCADE/`, Kanban dans `08 - Backlog/SARCADE - Kanban.md`).
+SARCADE coordonne les bénévoles ADRASEC (radioamateurs, sécurité civile) : carte partagée, positions, messages prioritaires, relevés goniométriques, APRS, main courante. Ce dépôt est le **serveur** (FastAPI, PostgreSQL/PostGIS, Alembic). Clients : `sdubos-consulting/sarcade-app` (Flutter). État actuel : `SARCADE/00 - Accueil/Reprise du projet par un autre assistant.md` du coffre (seule page d'état à jour ; `99 - Archives` = notes périmées). Spécifications et suivi : dépôt privé `sdubos-consulting/sarcade-vault` (coffre Obsidian, dossier `SARCADE/`, Kanban dans `08 - Backlog/SARCADE - Kanban.md`).
 
 ## Règles de travail avec le porteur (Stéphane, SDUBOS Consulting)
 1. **Aucun développement sans demande explicite.** Une idée nouvelle → proposition écrite avec des **choix par défaut numérotés**, validée avant de coder.
@@ -11,6 +11,7 @@ SARCADE coordonne les bénévoles ADRASEC (radioamateurs, sécurité civile) : c
 3. **Aucun secret dans la conversation** (mots de passe, clés, contenu de fichiers JSON de comptes de service). Les secrets vivent dans les secrets GitHub ou le `.env` du serveur, placés par le porteur.
 4. Commandes à exécuter par le porteur : **un seul bloc copiable par machine**, avec le **résultat attendu**.
 5. Une branche et une PR par sujet ; **fusion seulement après accord du porteur et CI verte**.
+   **Une fusion n'est pas une recette** : après fusion, la carte du Kanban va en « À recetter » ; elle ne passe en « Validé » que sur confirmation du porteur.
 6. Commits signés `SDUBOS Consulting <github@sdubos.com>` (identité git du dépôt).
 7. Tenir le coffre à jour après chaque étape : note de spécification (statut), Kanban, fiche de test.
 
