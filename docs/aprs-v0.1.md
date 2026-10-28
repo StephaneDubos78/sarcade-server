@@ -8,13 +8,15 @@ Le **serveur** est le seul à parler à APRS ; il redistribue les positions aux 
 ## Entrées
 | Entrée | Activation | Comportement |
 |---|---|---|
-| APRS-IS (Internet) | `SARCADE_APRS_IS=1` (`SARCADE_APRS_IS_HOST`, `SARCADE_APRS_IS_PORT`, défaut `rotate.aprs2.net:14580`) | connexion en lecture seule (code d'accès -1) sous l'indicatif `SARCADE_APRS_IS_LOGIN` (à défaut `SARCADE_APRS_CALLSIGN`) — obligatoire, les serveurs ferment la connexion de N0CALL, filtre `b/` limité aux indicatifs suivis, mis à jour à chaud ; le serveur n'envoie jamais rien vers APRS-IS |
+| APRS-IS (Internet) | `SARCADE_APRS_IS=1` (`SARCADE_APRS_IS_HOST`, `SARCADE_APRS_IS_PORT`, défaut `euro.aprs2.net:14580`) | connexion en lecture seule (code d'accès -1) sous l'indicatif `SARCADE_APRS_IS_LOGIN` (à défaut `SARCADE_APRS_CALLSIGN`) — obligatoire, les serveurs ferment la connexion de N0CALL, filtre `b/` limité aux indicatifs suivis, mis à jour à chaud ; le serveur n'envoie jamais rien vers APRS-IS |
 | Radio par le Gateway | `SARCADE_KISS_HOST`, `SARCADE_KISS_PORT` (défaut 8001) | modem logiciel KISS TCP (Dire Wolf) ; toutes les trames sont reçues, seules celles des indicatifs suivis sont gardées |
 | Lignes poussées par le Gateway | `POST /api/v0.1/aprs/frames` (`via`: `rf` ou `is`, `lines`) | pour un modem sans KISS TCP |
 
 Les deux entrées sont **fusionnées et dédoublonnées** : un même paquet (émetteur et contenu) entendu par radio et sur APRS-IS dans les 30 s n'est gardé qu'une fois.
 
 Décodage : positions non compressées et compressées (avec ou sans horodatage), **Mic-E** (la plupart des postes mobiles), objets, trafic tiers. Vérifié contre la bibliothèque aprslib sur près de 3 000 trames.
+
+Serveur APRS-IS réglable dans l'**outil d'administration** (jeton d'administration) : `PATCH /api/v0.1/admin/settings` avec `{"settings":{"aprs":{"is_host":"euro.aprs2.net","is_port":14580}}}`. Ordre de priorité : réglage d'administration, puis `SARCADE_APRS_IS_HOST` / `SARCADE_APRS_IS_PORT` du `.env`, puis `euro.aprs2.net:14580`. Un changement est appliqué sans redémarrage (reconnexion dans la minute) et inscrit au journal de sécurité ; `null` ou vide revient au `.env`.
 
 ## Groupes d'indicatifs
 - `GET/POST /api/v0.1/aprs/groups`, `PUT/DELETE /api/v0.1/aprs/groups/{id}` (nom, indicatifs) : créés par l'administrateur de l'organisation.
