@@ -13,8 +13,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import math
 
-KINDS = {"point", "line", "arrow", "circle", "rectangle", "zone", "text", "freehand", "measure"}
-POINT_KINDS = {"point", "text", "circle"}
+# « bearing »: radio direction-finding bearing (note « Relevés et croisements »):
+# the point is where it was taken, the line is drawn by the clients.
+KINDS = {"point", "line", "arrow", "circle", "rectangle", "zone", "text", "freehand", "measure", "bearing"}
+POINT_KINDS = {"point", "text", "circle", "bearing"}
 POLYGON_KINDS = {"rectangle", "zone"}
 ACTIONS = {"create", "update", "delete"}
 
@@ -96,7 +98,9 @@ def validate_upsert(payload: dict, *, event_id: str, object_id: str) -> dict:
     if not isinstance(updated_by, str) or not updated_by or len(updated_by) > 64:
         raise InvalidFeature("invalid_updated_by")
     created_by = payload.get("created_by") if isinstance(payload.get("created_by"), str) else updated_by
+    extra = {"bearing": validate_bearing(payload.get("bearing"))} if kind == "bearing" else {}
     return {
+        **extra,
         "id": object_id,
         "event_id": event_id,
         "kind": kind,
@@ -109,6 +113,44 @@ def validate_upsert(payload: dict, *, event_id: str, object_id: str) -> dict:
         "updated_by": updated_by,
         "updated_at": parse_time(payload.get("updated_at")),
     }
+
+
+def _num(v, lo, hi, error):
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not lo <= v <= hi:
+        raise InvalidFeature(error)
+    return float(v)
+
+
+def _text(v, n, error):
+    if v is None:
+        return ""
+    if not isinstance(v, str) or len(v) > n:
+        raise InvalidFeature(error)
+    return v.strip()
+
+
+def validate_bearing(raw) -> dict:
+    """Bearing details: true azimuth, line length (10 km by default), cone
+    (±5° by default), magnetic azimuth and declination when taken with the
+    compass, target, signal strength S1–S9 (0 = not given), comment, search
+    it belongs to (one colour per search), time it was taken."""
+    if not isinstance(raw, dict):
+        raise InvalidFeature("invalid_bearing")
+    out = {
+        "azimuth_deg": _num(raw.get("azimuth_deg"), 0, 360, "invalid_azimuth") % 360,
+        "length_m": _num(raw.get("length_m", 10_000), 100, 200_000, "invalid_length"),
+        "cone_deg": _num(raw.get("cone_deg", 5), 0, 45, "invalid_cone"),
+        "strength": int(_num(raw.get("strength", 0), 0, 9, "invalid_strength")),
+        "target": _text(raw.get("target"), 60, "invalid_target"),
+        "comment": _text(raw.get("comment"), 300, "invalid_comment"),
+        "search": _text(raw.get("search"), 80, "invalid_search"),
+        "method": raw.get("method") if raw.get("method") in ("compass", "manual", "map", "auto") else "manual",
+        "taken_at": iso(parse_time(raw.get("taken_at"))) if raw.get("taken_at") else None,
+    }
+    for key in ("magnetic_deg", "declination_deg", "accuracy_m"):
+        if raw.get(key) is not None:
+            out[key] = _num(raw.get(key), -360, 100_000, f"invalid_{key}")
+    return out
 
 
 def validate_delete(payload: dict, *, event_id: str, object_id: str) -> dict:
@@ -199,13 +241,15 @@ def feature_geojson(row) -> dict:
         properties["name"] = data["label"]
     if row.kind == "circle":
         properties["radius_m"] = data["radius_m"]
+    if row.kind == "bearing":
+        properties.update({f"bearing:{k}": v for k, v in (data.get("bearing") or {}).items()})
     return {"type": "Feature", "id": row.id, "geometry": geometry, "properties": properties}
 
 
 def logbook_summary(kind: str, label: str, action: str) -> str:
     names = {"point": "Point", "line": "Ligne", "arrow": "Flèche", "circle": "Cercle",
              "rectangle": "Rectangle", "zone": "Zone", "text": "Texte", "freehand": "Tracé libre",
-             "measure": "Mesure"}
+             "measure": "Mesure", "bearing": "Relevé"}
     what = names.get(kind, "Objet")
     if label:
         what += f" « {label} »"
