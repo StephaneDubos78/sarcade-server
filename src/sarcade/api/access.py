@@ -24,6 +24,8 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from sarcade.access.verify import identity_of, verifier
+
 router = APIRouter(prefix="/api/v0.1/access")
 
 _JWT = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$")
@@ -106,8 +108,20 @@ def session(request: Request):
         return {"protected": False}
     claims = token_claims(token)
     exp = claims.get("exp")
+    identity = identity_of(request)
     return {
         "protected": True,
         "email": claims.get("email"),
         "expires_at": datetime.fromtimestamp(exp, UTC) if isinstance(exp, (int, float)) else None,
+        # Server-side check: true (signature, issuer, audience checked), false
+        # (refused, mode « log »), null (not checked at this address).
+        "verified": True if identity is not None else (False if hasattr(request.state, "access_denied") else None),
+        "verify_reason": getattr(request.state, "access_denied", None),
     }
+
+
+@router.get("/status")
+def status():
+    """State of the server-side check, for the recette and the console:
+    mode, keys, counts of accepted and refused requests. No secret."""
+    return verifier().status()
