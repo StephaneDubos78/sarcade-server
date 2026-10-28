@@ -29,9 +29,12 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sarcade}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-sarcade}
       # APRS (docs/aprs-v0.1.md): APRS-IS over the Internet and/or local radio
       # through a KISS TCP modem such as Dire Wolf on the Gateway.
+      # Address search (docs/geocode-v0.1.md): empty switches it off.
+      SARCADE_GEOCODER_URL: ${SARCADE_GEOCODER_URL-https://api-adresse.data.gouv.fr/search/}
       SARCADE_APRS_IS: ${SARCADE_APRS_IS:-0}
       SARCADE_APRS_IS_HOST: ${SARCADE_APRS_IS_HOST:-euro.aprs2.net}
       SARCADE_APRS_IS_PORT: ${SARCADE_APRS_IS_PORT:-14580}
+      SARCADE_APRS_IS_LOGIN: ${SARCADE_APRS_IS_LOGIN:-}
       SARCADE_APRS_CALLSIGN: ${SARCADE_APRS_CALLSIGN:-}
       SARCADE_KISS_HOST: ${SARCADE_KISS_HOST:-}
       SARCADE_KISS_PORT: ${SARCADE_KISS_PORT:-8001}

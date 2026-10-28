@@ -102,6 +102,10 @@ def ingest(db: Session, line: str, via: str, now: datetime, dedup: Deduplicator 
         return []
     if dedup is not None and not dedup.first_time(key, now):
         return []
+    try:
+        path = ",".join(parser.parse_tnc2(line).path)
+    except Exception:  # noqa: BLE001 - the path is a detail, never a reason to drop
+        path = ""
     results = []
     for event in active_events(db):
         if not calls.matches(pos.callsign, event_callsigns(db, event)):
@@ -117,6 +121,7 @@ def ingest(db: Session, line: str, via: str, now: datetime, dedup: Deduplicator 
             point=WKTElement(f"POINT({pos.lon} {pos.lat})", srid=4326),
             alt_m=pos.alt_m, accuracy_m=None, heading_deg=(pos.course_deg % 360) if pos.course_deg else None,
             speed_mps=pos.speed_mps, time=now, source="aprs", aprs_via=via,
+            aprs_symbol=(pos.symbol or None) and pos.symbol[:2], aprs_path=path[:160] or None,
         )
         db.add(row)
         if device is not None and (device.last_position_at is None or now > device.last_position_at):
@@ -127,6 +132,7 @@ def ingest(db: Session, line: str, via: str, now: datetime, dedup: Deduplicator 
             "speed_mps": pos.speed_mps, "time": now.isoformat().replace("+00:00", "Z"),
             "battery_pct": None, "source": "aprs", "aprs_via": via, "callsign": pos.callsign,
             "symbol": pos.symbol, "comment": pos.comment,
+            "aprs_symbol": row.aprs_symbol, "aprs_path": row.aprs_path,
         }))
     db.flush()
     return results
