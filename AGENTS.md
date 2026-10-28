@@ -1,0 +1,39 @@
+# AGENTS.md — sarcade-server
+
+Consignes pour tout assistant de code (Claude, ChatGPT/Codex, autre) qui reprend ce dépôt. À lire avant toute modification.
+
+## Le projet en bref
+SARCADE coordonne les bénévoles ADRASEC (radioamateurs, sécurité civile) : carte partagée, positions, messages prioritaires, relevés goniométriques, APRS, main courante. Ce dépôt est le **serveur** (FastAPI, PostgreSQL/PostGIS, Alembic). Clients : `sdubos-consulting/sarcade-app` (Flutter). Spécifications et suivi : dépôt privé `sdubos-consulting/sarcade-vault` (coffre Obsidian, dossier `SARCADE/`, Kanban dans `08 - Backlog/SARCADE - Kanban.md`).
+
+## Règles de travail avec le porteur (Stéphane, SDUBOS Consulting)
+1. **Aucun développement sans demande explicite.** Une idée nouvelle → proposition écrite avec des **choix par défaut numérotés**, validée avant de coder.
+2. Réponses **en français**, style direct.
+3. **Aucun secret dans la conversation** (mots de passe, clés, contenu de fichiers JSON de comptes de service). Les secrets vivent dans les secrets GitHub ou le `.env` du serveur, placés par le porteur.
+4. Commandes à exécuter par le porteur : **un seul bloc copiable par machine**, avec le **résultat attendu**.
+5. Une branche et une PR par sujet ; **fusion seulement après accord du porteur et CI verte**.
+6. Commits signés `SDUBOS Consulting <github@sdubos.com>` (identité git du dépôt).
+7. Tenir le coffre à jour après chaque étape : note de spécification (statut), Kanban, fiche de test.
+
+## Lancer les tests
+```bash
+pip install -e '.[dev]'          # ou : uv sync --extra dev
+python -m pytest -q              # tests unitaires (SQLite, rapides)
+```
+La CI (`.github/workflows/ci.yml`) lance aussi `demo-integration` : PostGIS + serveur en Docker, puis les scripts `demo/verify_*.py` (un par fonction : APRS, groupes, réveil, HTTPS…). Ajouter un `verify_*.py` pour toute nouvelle API.
+
+## Pièges connus
+- **Migrations Alembic** dans `migrations/versions/`, numérotées `00NN_*.py` en chaîne stricte. Avant de créer une migration, vérifier le dernier numéro sur `main` (deux branches ont déjà créé la même 0015).
+- **Dépendances** : `uv.lock` est figé (l'image Docker installe avec hachages). Toute dépendance ajoutée dans `pyproject.toml` impose `uv lock` (un oubli a cassé l'image le 28 octobre 2026).
+- Le serveur du NAS suit `main` automatiquement quand la CI est verte (`sarcade-autoupdate`) : une fusion = un déploiement.
+- Le compose du NAS est personnalisé : toute nouvelle variable d'environnement doit être ajoutée par le porteur dans `docker-compose.override.yml` du NAS (`/volume1/docker/sarcade`).
+- Secrets serveur : `.env` du NAS ; fichiers (ex. compte de service Firebase) dans `/volume1/docker/sarcade/secrets/`, montés en lecture seule.
+
+## Repères dans le code
+- `src/sarcade/api/app.py` : application, synchronisation (`/api/v0.1/sync`, une opération = un savepoint), temps réel.
+- `src/sarcade/<domaine>/` : un module par fonction (aprs, groups, routes, wakeup, updates, security, licensing…), routes dans `src/sarcade/api/`.
+- `docs/*-v0.1.md` : contrat de chaque fonction (à mettre à jour avec le code).
+
+## Accès dont l'assistant a besoin
+- GitHub sur `sarcade-server`, `sarcade-app`, `sarcade-vault` : Contents, Pull requests, Actions en lecture/écriture ; Checks en lecture.
+- Un environnement Linux avec git, Python ≥ 3.12, pytest, uv ; réseau vers GitHub et PyPI.
+- Pas d'accès au NAS, à la Play Console, à Firebase ni à Cloudflare : le porteur exécute, l'assistant prépare les blocs.
