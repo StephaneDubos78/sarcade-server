@@ -59,6 +59,10 @@ class PositionRow(Base):
     source: Mapped[str] = mapped_column(String(16), default="device", nullable=False)
     # APRS only: "rf" (radio, Gateway) or "is" (APRS-IS, Internet).
     aprs_via: Mapped[str | None] = mapped_column(String(8))
+    # APRS only: symbol (table + code, "/>" = car) and path of the packet
+    # ("F4JPO-10*,WIDE1-1,qAR,F4JPO-10"), shown in the station sheet.
+    aprs_symbol: Mapped[str | None] = mapped_column(String(2))
+    aprs_path: Mapped[str | None] = mapped_column(String(160))
 
 
 class POIRow(Base):
