@@ -46,7 +46,7 @@ jobs:
           tags: sarcade-server:scan
           build-args: SARCADE_VERSION=${{ steps.v.outputs.version }}
       - name: Scan the image (a critical flaw blocks the publication)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sarcade-server:scan
           severity: CRITICAL
