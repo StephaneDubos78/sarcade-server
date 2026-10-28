@@ -86,8 +86,12 @@ def all_followed_callsigns(db: Session) -> list[str]:
 def _device_for(db: Session, event_id: str, callsign: str) -> DeviceRow | None:
     rows = db.scalars(select(DeviceRow).where(DeviceRow.event_id == event_id,
                                               DeviceRow.callsign.is_not(None))).all()
+    # Exact callsign, SSID included (decision of 28 Oct 2026): a terminal
+    # declaring « F4JPO » no longer takes over F4JPO-5, the aprs.fi beacon of
+    # the same operator elsewhere; « F4JPO » and « F4JPO-0 » are the same.
+    wanted = callsign.strip().upper().removesuffix("-0")
     for row in rows:
-        if calls.matches(callsign, [row.callsign]):
+        if (row.callsign or "").strip().upper().removesuffix("-0") == wanted:
             return row
     return None
 

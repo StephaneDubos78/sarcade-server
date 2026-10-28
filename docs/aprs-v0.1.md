@@ -24,7 +24,7 @@ Serveur APRS-IS réglable dans l'**outil d'administration** (jeton d'administrat
 - Un événement suit des groupes et le PCO peut ajouter des indicatifs : réglages `aprs_groups` et `aprs_callsigns` (`PATCH /events/{id}/settings`). `GET /events/{id}/aprs/callsigns` donne la liste effective. Un événement terminé ne suit plus rien.
 
 ## Rattachement aux opérateurs
-Un opérateur déclare son indicatif dans le heartbeat (`callsign`) : ses positions APRS se rattachent à son appareil. Sinon, la station apparaît sous `aprs:<indicatif>`.
+Un opérateur déclare son indicatif dans le heartbeat (`callsign`) : les positions APRS de **cet indicatif exact, SSID compris**, se rattachent à son appareil (F4JPO ne récupère pas F4JPO-5 ; décision du 28 octobre 2026). Sinon, la station apparaît sous `aprs:<indicatif>`. La position garde son `callsign` pour l'affichage.
 
 ## Émission radio locale (désactivée par défaut)
 Réglage `aprs_tx_rf` du PCO, consentement de l'opérateur (`aprs_tx_consent` dans le heartbeat), indicatif de l'ADRASEC (`SARCADE_APRS_CALLSIGN`) et liaison radio active : la position de l'opérateur est émise **en radio seulement**, comme objet portant son indicatif, sous l'indicatif de l'ADRASEC, au plus toutes les 2 minutes. Jamais vers APRS-IS.

@@ -146,3 +146,20 @@ def test_radio_transmission_needs_pco_decision_consent_and_callsigns(monkeypatch
     assert line.startswith("F6KRK>APZSAR,WIDE1-1:;F4JPO    *"), "object sent under the ADRASEC callsign"
     monkeypatch.setenv("SARCADE_APRS_CALLSIGN", "")
     assert not service.queue_transmission(on, device, 48.8, 2.1, now + timedelta(minutes=10)), "no ADRASEC callsign"
+
+
+def test_station_linked_to_a_terminal_only_with_the_exact_ssid():
+    from sarcade.aprs import service
+    from sarcade.db.models import DeviceRow
+
+    class _Db:
+        def __init__(self, rows): self.rows = rows
+        def scalars(self, _q): return self
+        def all(self): return self.rows
+
+    pco = DeviceRow(event_id="e", device_id="PCO-demo", callsign="F4JPO")
+    tel = DeviceRow(event_id="e", device_id="TEL-05", callsign="F4JPO-5")
+    assert service._device_for(_Db([pco]), "e", "F4JPO-5") is None, "F4JPO-5 is not the terminal F4JPO"
+    assert service._device_for(_Db([pco, tel]), "e", "F4JPO-5") is tel
+    assert service._device_for(_Db([pco]), "e", "F4JPO") is pco
+    assert service._device_for(_Db([pco]), "e", "F4JPO-0") is pco
