@@ -204,6 +204,7 @@ h2{font-size:16px;color:#b9c6d2;text-transform:uppercase;letter-spacing:1px;marg
 <script>
 const $=id=>document.getElementById(id);let token=localStorage.getItem('sarcade_tv_token');let map,markers={};
 const appHost=location.hostname.replace(/^tv\\./,'app.');
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function hm(t){const d=new Date(t);return d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});}
 async function pair(){const r=await fetch('/api/v0.1/tv/pair',{method:'POST'});if(!r.ok){$('hint').textContent='Réessai dans une minute…';setTimeout(pair,60000);return;}
 const p=await r.json();$('code').textContent=p.code;$('qr').innerHTML='';new QRCode($('qr'),{text:'https://'+appHost+'/tv/approve?code='+p.code,width:220,height:220});
@@ -214,10 +215,10 @@ async function refresh(){const r=await fetch('/api/v0.1/tv/state',{headers:{auth
 if(r.status===401){localStorage.removeItem('sarcade_tv_token');location.reload();return;}if(!r.ok)return;const s=await r.json();
 $('title').textContent='SARCADE · '+s.event.name;const pts=[];
 for(const p of s.positions){const ll=[p.lat,p.lon];pts.push(ll);const k=p.device_id;
-if(!markers[k])markers[k]=L.circleMarker(ll,{radius:8,color:'#3dd6f5',fillOpacity:.9}).bindTooltip(k,{permanent:true,direction:'right'}).addTo(map);else markers[k].setLatLng(ll);}
+if(!markers[k])markers[k]=L.circleMarker(ll,{radius:8,color:'#3dd6f5',fillOpacity:.9}).bindTooltip(esc(k),{permanent:true,direction:'right'}).addTo(map);else markers[k].setLatLng(ll);}
 if(pts.length&&!map._fitted){map.fitBounds(pts,{padding:[40,40],maxZoom:15});map._fitted=true;}
-$('msgs').innerHTML=s.messages.slice(-8).reverse().map(m=>'<div class="m '+(m.priority==='immediate'?'i':m.priority==='urgent'?'u':'')+'">'+hm(m.created_at)+' · <b>'+m.sender_id+'</b> : '+m.body.replace(/</g,'&lt;')+'</div>').join('');
-$('log').innerHTML=s.logbook.slice(-8).reverse().map(l=>'<div class="m">'+hm(l.time)+' · '+l.summary.replace(/</g,'&lt;')+'</div>').join('');
+$('msgs').innerHTML=s.messages.slice(-8).reverse().map(m=>'<div class="m '+(m.priority==='immediate'?'i':m.priority==='urgent'?'u':'')+'">'+hm(m.created_at)+' · <b>'+esc(m.sender_id)+'</b> : '+esc(m.body)+'</div>').join('');
+$('log').innerHTML=s.logbook.slice(-8).reverse().map(l=>'<div class="m">'+hm(l.time)+' · '+esc(l.summary)+'</div>').join('');
 const recent=s.messages.filter(m=>m.priority==='immediate'&&Date.now()-new Date(m.created_at)<10*60000).pop();
 $('alert').style.display=recent?'block':'none';if(recent)$('alert').textContent=recent.sender_id+' : '+recent.body;}
 function start(){$('pair').style.display='none';$('app').style.display='grid';map=L.map('map',{zoomControl:false}).setView([46.6,2.4],6);
