@@ -34,6 +34,9 @@ DEFAULT_SETTINGS: dict = {
     # Stations without news for longer are « Anciens »: folded in the list,
     # hidden on the map (decision of 28 Oct 2026, 2 h by default).
     "position_old_min": 120,
+    # Predefined messages sent in one touch (ATAK 6), set by the PCO;
+    # empty: the applications offer their own list.
+    "quick_messages": [],
     # Weather (note « Prévisions météo »): forecast point of the event and
     # department for the Météo-France vigilance.
     "weather_lat": None,
@@ -44,7 +47,7 @@ DEFAULT_SETTINGS: dict = {
 }
 
 _BOOL_KEYS = {"low_bandwidth", "tracking_required", "aprs_tx_rf"}
-_LIST_KEYS = {"aprs_groups", "aprs_callsigns"}
+_LIST_KEYS = {"aprs_groups", "aprs_callsigns", "quick_messages"}
 _COORD_KEYS = {"weather_lat": 90, "weather_lon": 180}
 _INT_RANGES = {
     "low_bandwidth_interval_s": (15, 3600),
@@ -119,6 +122,11 @@ def _clean_list(key: str, value) -> list[str]:
             return normalize_list(value)
         except InvalidCallsign as exc:
             raise InvalidSettings(f"invalid_value:{key}") from exc
+    if key == "quick_messages":
+        if not isinstance(value, list) or len(value) > 20 or not all(
+                isinstance(v, str) and 0 < len(v.strip()) <= 120 for v in value):
+            raise InvalidSettings(f"invalid_value:{key}")
+        return list(dict.fromkeys(v.strip() for v in value))
     if not isinstance(value, list) or len(value) > 50 or not all(
             isinstance(v, str) and 0 < len(v) <= 64 for v in value):
         raise InvalidSettings(f"invalid_value:{key}")
@@ -165,6 +173,8 @@ def logbook_summaries(old: dict | None, new: dict) -> list[str]:
     if before["aprs_tx_callsign"] != after["aprs_tx_callsign"]:
         lines.append(f"APRS : émission radio locale sous l'indicatif {after['aprs_tx_callsign']}"
                      if after["aprs_tx_callsign"] else "APRS : indicatif d'émission radio locale retiré")
+    if before["quick_messages"] != after["quick_messages"]:
+        lines.append(f"Messages prédéfinis : {len(after['quick_messages'])} message(s) proposé(s)")
     if before["position_old_min"] != after["position_old_min"]:
         lines.append(f"Stations « anciennes » après {_duration(after['position_old_min'] * 60)} sans nouvelles")
     if (before["weather_lat"], before["weather_lon"]) != (after["weather_lat"], after["weather_lon"]):

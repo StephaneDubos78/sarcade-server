@@ -13,6 +13,7 @@ from sarcade.groups import service as groups
 from sarcade.sync.service import record_operation
 
 from .deps import get_db
+from .roles import require_pco
 
 router = APIRouter(prefix="/api/v0.1")
 
@@ -148,15 +149,19 @@ def list_groups(event_id: str, include_deleted: bool = Query(False), db: Session
 
 
 @router.post("/events/{event_id}/groups/defaults")
-def create_default_groups(event_id: str, db: Session = Depends(get_db)):
-    """Creates the ADRASEC default groups when missing (events created
-    before this version). Idempotent."""
+def create_default_groups(event_id: str, template: str | None = None, db: Session = Depends(get_db),
+                          _pco=Depends(require_pco)):
+    """Creates the base channels (« Tous », « Diffusion PCO ») or, with
+    ``template=adrasec``, the channels of the ADRASEC model (PCO, Équipes
+    terrain, Transmissions, Logistique) when missing. Idempotent."""
     if db.get(EventRow, event_id) is None:
         raise HTTPException(status_code=404, detail="event_not_found")
+    if template is not None and template not in groups.TEMPLATES:
+        raise HTTPException(status_code=422, detail="unknown_template")
     now = datetime.now(UTC)
-    created = ensure_groups(db, event_id, groups.default_groups(event_id, now), now)
+    created = ensure_groups(db, event_id, groups.default_groups(event_id, now, template), now)
     if created:
         db.add(LogbookRow(event_id=event_id, kind="group", object_id=None, actor_id="PCO", time=now,
-                          summary="Groupes par défaut ADRASEC créés"))
+                          summary="Canaux du modèle ADRASEC ajoutés" if template else "Canaux par défaut créés"))
     db.commit()
     return {"created": len(created)}

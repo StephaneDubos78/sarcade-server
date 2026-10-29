@@ -43,8 +43,11 @@ def sync(object_type, object_id, payload, action="create"):
 
 
 g = groups()
+check(list(g) == ["Tous", "Diffusion PCO"], "base channels created with the event")
+check(c.post(f"{E}/groups/defaults?template=adrasec").json()["created"] == 4, "ADRASEC model added")
+g = groups()
 check(list(g) == ["Tous", "Diffusion PCO", "PCO", "Équipes terrain", "Transmissions", "Logistique"],
-      "ADRASEC default groups created with the event")
+      "ADRASEC model channels present")
 check(g["Diffusion PCO"]["mode"] == "listen_only", "Diffusion PCO is listen-only")
 check(c.post(f"{E}/groups/defaults").json()["created"] == 0, "default groups are not duplicated")
 
