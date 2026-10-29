@@ -68,4 +68,18 @@ check(d.headers.get("x-content-type-options") == "nosniff", "download is not sni
 bad = dict(message, id=str(uuid.uuid4()), attachments=[{"file_id": "../x"}])
 bad_op = dict(op, operation_id=str(uuid.uuid4()), object_id=bad["id"], payload=bad)
 check(c.post(f"{BASE}/api/v0.1/sync", json=[bad_op]).json()[0]["status"] == "rejected", "invalid attachment rejected")
+# Subfolders of the event files.
+F = f"{BASE}/api/v0.1/events/{event}/files"
+r = c.post(f"{F}/folders", json={"path": "Procédures/Radio", "actor_id": "PCO"})
+check(r.status_code == 201 and r.json()["folders"] == ["Procédures", "Procédures/Radio"], "folder created with its parent")
+check(c.post(f"{F}/folders", json={"path": "Procédures"}).status_code == 409, "existing folder refused")
+check(c.post(f"{F}/folders", json={"path": "A/B/C/D"}).status_code == 400, "folder deeper than 3 refused")
+r = c.patch(f"{F}/{fid}", json={"folder": "Procédures/Radio", "actor_id": "PCO"})
+check(r.status_code == 200 and r.json()["folder"] == "Procédures/Radio", "file moved into a folder")
+check(c.delete(f"{F}/folders", params={"path": "Procédures"}).status_code == 409, "folder not empty kept")
+r = c.patch(f"{F}/folders", json={"from": "Procédures", "to": "Docs"})
+check(r.status_code == 200 and "Docs/Radio" in r.json()["folders"], "folder renamed with its subfolders")
+listing = c.get(f"{F}?with_folders=true").json()
+check([f["folder"] for f in listing["files"] if f["id"] == fid] == ["Docs/Radio"], "file follows its folder")
+check(isinstance(c.get(F).json(), list), "plain file list kept for older applications")
 print("message photos: all checks passed")
