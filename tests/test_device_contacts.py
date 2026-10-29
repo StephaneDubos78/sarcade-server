@@ -110,7 +110,8 @@ def test_heartbeat_logs_version_changes_not_the_first_report(client, db):
 
 
 def test_tv_hides_version_and_contact_lines():
-    assert {"device_version", "contact"} <= tv.TV_HIDDEN_LOG_KINDS
+    # The TV no longer shows the logbook at all (29 Oct 2026).
+    assert "logbook" not in tv.snapshot({"id": "e"}, [], [])
 
 
 def test_bearing_exercise_and_frequency():

@@ -93,6 +93,21 @@ server on a network without Internet: `PUT /admin/clients/{platform}/package`,
 `GET /clients/latest`, `GET /clients/{platform}/package` (SHA-256 given; the
 client checks the platform signature before installing).
 
+### Version published on the stores (phones)
+
+Android and iPhone are not updated by the local server but by Google Play
+and TestFlight. `client_update.latest` (answer of `POST /clients/check` and
+of the heartbeat) gives the last published version of the platform of the
+device, `{"version": "0.1.0", "build": 415, "url": null}` or `null`; the
+application shows « Nouvelle version disponible » with a « Mettre à jour »
+button (never an obligation). Source, first found:
+
+1. administration setting `clients.releases`
+   (`PATCH /admin/settings` `{"settings": {"clients": {"releases": {"android": {"version": "0.1.0", "build": 415}}}}}`),
+   `url` optional (https, `itms-beta://` or `market://`);
+2. variables `SARCADE_CLIENT_RELEASE_ANDROID` / `SARCADE_CLIENT_RELEASE_IOS`
+   (`0.1.0+415`).
+
 ## SIEM (SARCADE Pro, module « siem »)
 
 Enabled by a signed SARCADE Pro licence with the `siem` module (docs/pro-licences-v0.1.md);

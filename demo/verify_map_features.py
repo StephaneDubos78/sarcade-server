@@ -149,5 +149,9 @@ r = c.put(f"{BASE}/api/v0.1/events/{event}/displays/{disp['id']}/view",
 check(r.status_code == 200 and r.json()["view"]["layers"]["bearings"] is False, "view with layers sent to the TV")
 st = c.get(f"{BASE}/api/v0.1/tv/state", headers=TVH, params={"fr": st["features_rev"]}).json()
 check(st["bearings"] == [] and st["options"]["opacity"]["draw"] == 0.5, "hidden layer not drawn by the TV")
+check("logbook" not in st and "alert" in st and isinstance(st["sos"], list), "TV: no logbook, SOS banner state")
+r = c.post(f"{BASE}/api/v0.1/events/{event}/displays/{disp['id']}/alert/clear")
+check(r.status_code == 200 and c.get(f"{BASE}/api/v0.1/tv/state", headers=TVH).json()["alert"] is None,
+      "SOS banner cleared on the screen")
 
 print("PASS: map feature synchronisation follows ADR-001")

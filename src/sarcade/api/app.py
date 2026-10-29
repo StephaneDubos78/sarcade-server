@@ -25,6 +25,8 @@ from sarcade.reference.umap import REFERENCE_LAYERS, parse_umap_reference_sites
 from sarcade.sync.service import VALID_TYPES, record_operation
 from sarcade.features import service as features
 from sarcade.messages import attachments as msg_attachments
+from sarcade.pois import service as pois
+from sarcade.messages import deletion as msg_deletion
 
 from .deps import get_db
 from . import operations as event_ops
@@ -224,7 +226,7 @@ async def create_poi(event_id: str, payload: POICreate, db: Session = Depends(ge
         raise HTTPException(status_code=409, detail="poi_already_exists")
     row = POIRow(id=payload.id, event_id=event_id, kind=payload.kind, label=payload.label,
         point=WKTElement(f"POINT({payload.lon} {payload.lat})", srid=4326),
-        created_at=datetime.now(UTC), version=0)
+        created_at=datetime.now(UTC), version=0, created_by=payload.created_by, color=payload.color)
     db.add(row); db.commit(); db.refresh(row)
     data = poi_dict(row)
     await manager.broadcast(event_id, {"type": "poi.created", "data": data})
@@ -233,7 +235,7 @@ async def create_poi(event_id: str, payload: POICreate, db: Session = Depends(ge
 
 @app.get("/api/v0.1/events/{event_id}/pois", response_model=list[POIOut])
 def list_pois(event_id: str, db: Session = Depends(get_db)):
-    rows = db.scalars(select(POIRow).where(POIRow.event_id == event_id).order_by(POIRow.created_at)).all()
+    rows = db.scalars(select(POIRow).where(POIRow.event_id == event_id, POIRow.deleted_at.is_(None)).order_by(POIRow.created_at)).all()
     return [poi_dict(row) for row in rows]
 
 
@@ -431,9 +433,14 @@ async def upload_file(event_id:str,request:Request,sender_id:str=Form(...),file:
     return file_dict(row)
 
 @app.get("/api/v0.1/events/{event_id}/files/{file_id}/content")
-def download_file(event_id:str,file_id:str,db:Session=Depends(get_db)):
+def download_file(event_id:str,file_id:str,request:Request,db:Session=Depends(get_db)):
     row=db.get(SharedFileRow,file_id)
     if row is None or row.event_id!=event_id: raise HTTPException(status_code=404,detail="file_not_found")
+    # Photo of a deleted message: only a checked PCO / administrator still gets it.
+    if file_id in msg_deletion.hidden_file_ids(db,event_id):
+        email=roles_api.checked_email(request)
+        if email is None or "pco" not in user_roles.roles_of(db,email):
+            raise HTTPException(status_code=410,detail="message_deleted")
     path=Path(row.storage_path)
     if not path.is_file(): raise HTTPException(status_code=404,detail="file_content_not_found")
     # Same origin as the web client: never let a browser sniff or render an
@@ -537,6 +544,45 @@ def _apply_map_feature(db: Session, op, now: datetime) -> tuple[str, int, dict |
     return "accepted", cursor, {"type": kind, "data": result}
 
 
+def _apply_poi_change(db: Session, op, now: datetime, pco: bool) -> tuple[str, int, dict | None]:
+    """Rename or delete of a point of interest: by its author or the PCO;
+    the change feed carries the resulting state (``deleted`` on a deletion)."""
+    row = db.get(POIRow, op.object_id)
+    if row is None or row.event_id != op.event_id:
+        raise SyncRejected("point d'intérêt inconnu")
+    actor = pois.actor_of(op.payload)
+    if not pois.can_edit(row.created_by, actor, pco):
+        raise SyncRejected("seul l'auteur du point ou le PCO peut le modifier", journal=dict(
+            category="rights", action="write_refused", outcome="refused", actor=actor, event_id=op.event_id,
+            details={"object_type": "poi", "object_id": op.object_id, "action": op.action}))
+    try:
+        label = pois.clean_label(op.payload.get("label")) if op.action == "update" else row.label
+    except pois.InvalidPoi:
+        raise SyncRejected("nom de point invalide")
+    status, cursor = record_operation(
+        db, event_id=op.event_id, operation_id=op.operation_id, object_id=op.object_id,
+        object_type=op.object_type, action=op.action, payload=op.payload, client_time=op.client_time)
+    if status != "accepted":
+        return status, cursor, None
+    journal = db.scalar(select(SyncOperationRow).where(SyncOperationRow.seq == cursor))
+    if row.deleted_at is not None:
+        # Already deleted elsewhere: nothing more to do.
+        journal.status = "conflict"
+        return "conflict", cursor, None
+    row.updated_by, row.updated_at = actor, now
+    row.version = (row.version or 0) + 1
+    if op.action == "delete":
+        row.deleted_at = now
+        db.add(LogbookRow(event_id=op.event_id, kind="poi", object_id=row.id, actor_id=actor, time=now,
+                          summary=pois.logbook_summary(row.label, "delete")))
+    else:
+        row.label = label
+    db.flush()
+    result = pois.state(row)
+    journal.payload = result
+    return "accepted", cursor, {"type": "poi.deleted" if op.action == "delete" else "poi.updated", "data": result}
+
+
 def _iso(value) -> datetime:
     if not isinstance(value, str):
         raise ValueError("invalid_time")
@@ -564,6 +610,8 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
         return _apply_map_feature(db, op, now)
     if op.object_type == "comm_group":
         return groups_api.apply_group(db, op, now)
+    if op.object_type == "poi" and op.action in ("update", "delete"):
+        return _apply_poi_change(db, op, now, pco)
     if op.object_type not in VALID_TYPES:
         raise SyncRejected(f"type d'élément inconnu : {op.object_type}")
     if op.object_type == "message" and op.action == "create":
@@ -578,6 +626,8 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
                 actor=str(op.payload.get("sender_id", ""))[:64] or None, event_id=op.event_id,
                 details={"object_type": "message", "reason": "listen_only_or_archived_group",
                          "recipients": op.payload.get("recipient_ids") or []}))
+    if op.object_type == "message" and op.action == "delete":
+        return _apply_message_delete(db, op, now, pco)
     p = op.payload
     if op.object_type == "ack" and op.action == "create" and db.get(AckRow, op.object_id) is None:
         if db.get(MessageRow, p.get("message_id")) is None:
@@ -610,6 +660,7 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
             id=op.object_id, event_id=op.event_id, kind=p["kind"], label=p.get("label"),
             point=WKTElement(f'POINT({float(p["lon"])} {float(p["lat"])})', srid=4326),
             created_at=_iso(p["created_at"]), version=0,
+            created_by=pois.actor_of(p), color=pois.clean_color(p.get("color")),
         )
         db.add(row); db.flush()
         return status, cursor, {"type": "poi.created", "data": p}
@@ -635,6 +686,29 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
     return status, cursor, None
 
 
+
+def _apply_message_delete(db: Session, op: SyncOperationIn, now: datetime, pco: bool) -> tuple[str, int, dict | None]:
+    """Deletion for everyone: the author during 2 days, the PCO always."""
+    existing = db.scalar(select(SyncOperationRow).where(SyncOperationRow.operation_id == op.operation_id))
+    if existing is not None:
+        return "duplicate", existing.seq, None
+    row = db.get(MessageRow, op.object_id)
+    if row is None or row.event_id != op.event_id:
+        raise SyncRejected("suppression d'un message inconnu de ce serveur")
+    if row.deleted_at is not None:
+        return "conflict", 0, None
+    actor = str(op.payload.get("deleted_by") or "")[:64]
+    ok, as_pco = msg_deletion.allowed(row, actor, pco or groups.is_pco(actor), now)
+    if not ok:
+        raise SyncRejected("suppression refusée : réservée à l'auteur pendant 2 jours, ou au PCO", journal=dict(
+            category="rights", action="write_refused", outcome="refused", actor=actor or None,
+            event_id=op.event_id, details={"object_type": "message", "reason": "delete_not_allowed",
+                                           "message_id": row.id}))
+    data = msg_deletion.apply(db, row, actor, as_pco, now)
+    status, cursor = record_operation(
+        db, event_id=op.event_id, operation_id=op.operation_id, object_id=op.object_id,
+        object_type="message", action="delete", payload=data, client_time=op.client_time)
+    return status, cursor, {"type": "message.deleted", "data": data}
 
 
 _REJECT_REASONS = {"route": "route invalide ou non autorisée", "route_waypoint": "point de passage invalide",
@@ -756,8 +830,15 @@ def map_features_geojson(event_id: str, db: Session = Depends(get_db)):
 @app.get("/api/v0.1/events/{event_id}/messages")
 def list_messages(event_id: str, limit: int = Query(200, ge=1, le=2000), db: Session = Depends(get_db)):
     rows = db.scalars(select(MessageRow).where(MessageRow.event_id == event_id).order_by(MessageRow.created_at.desc()).limit(limit)).all()
-    return [{"id":r.id,"event_id":r.event_id,"sender_id":r.sender_id,"recipient_ids":r.recipient_ids,
-             "priority":r.priority,"body":r.body,"attachments":r.attachments or [],"created_at":r.created_at} for r in reversed(rows)]
+    return [msg_deletion.public_dict(r) for r in reversed(rows)]
+
+
+@app.get("/api/v0.1/events/{event_id}/messages/deleted")
+def list_deleted_messages(event_id: str, _pco: str | None = Depends(roles_api.require_pco), db: Session = Depends(get_db)):
+    """Deleted messages with their original content: PCO and administrators only."""
+    rows = db.scalars(select(MessageRow).where(MessageRow.event_id == event_id, MessageRow.deleted_at.is_not(None))
+                      .order_by(MessageRow.deleted_at)).all()
+    return [msg_deletion.pco_dict(r) for r in rows]
 
 @app.get("/api/v0.1/events/{event_id}/logbook")
 def list_logbook(event_id: str, after: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=2000), db: Session = Depends(get_db)):

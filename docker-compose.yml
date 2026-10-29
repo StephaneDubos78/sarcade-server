@@ -59,6 +59,9 @@ services:
       SARCADE_ADMIN_TOKEN: ${SARCADE_ADMIN_TOKEN:-}
       SARCADE_SERVER_ID: ${SARCADE_SERVER_ID:-}
       SARCADE_UPDATE_CHECK: ${SARCADE_UPDATE_CHECK:-1}
+      # Last versions on Google Play / TestFlight (« 0.1.0+415 »), shown on phones.
+      SARCADE_CLIENT_RELEASE_ANDROID: ${SARCADE_CLIENT_RELEASE_ANDROID:-}
+      SARCADE_CLIENT_RELEASE_IOS: ${SARCADE_CLIENT_RELEASE_IOS:-}
       SARCADE_FILE_ROOT: /var/lib/sarcade/files
       # SIEM (SARCADE Pro, module « siem », signed licence uploaded in the
       # administration tool, docs/pro-licences-v0.1.md): Wazuh syslog over TLS.
