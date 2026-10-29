@@ -91,6 +91,8 @@ async def tv_host_only_display(request, call_next):
     """tv.* (Smart TV, no Cloudflare Access): only the display page and its
     pairing and reading API answer; everything else is « not found »."""
     host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host.startswith("tv.") and request.url.path == "/":
+        return tv_api.tv_page()          # tv.sarcade.org alone opens the display
     if host.startswith("tv.") and not tv_api.tv_host_allows(request.url.path):
         return JSONResponse({"detail": "not_found"}, status_code=404)
     return await call_next(request)

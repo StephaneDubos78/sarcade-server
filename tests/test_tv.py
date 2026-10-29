@@ -69,3 +69,13 @@ def test_any_operator_pairs_a_tv():
 def test_tv_logo_is_served_on_the_tv_address():
     assert api.tv_host_allows("/tv/logo.png")
     assert api._LOGO.is_file()
+
+
+def test_tv_address_alone_opens_the_display():
+    from fastapi.testclient import TestClient
+    from sarcade.api.app import app
+    c = TestClient(app)
+    r = c.get("/", headers={"host": "tv.sarcade.org"})
+    assert r.status_code == 200 and "SARCADE" in r.text and "sarcade_tv_token" in r.text
+    assert c.get("/api/v0.1/events", headers={"host": "tv.sarcade.org"}).status_code == 404
+

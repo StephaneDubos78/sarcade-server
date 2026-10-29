@@ -1,6 +1,6 @@
 """Smart TV and big screens (« Affichage sur Smart TV et grand écran »).
 
-- ``/tv``: full-screen read-only page for the TV (served on tv.sarcade.org,
+- ``/tv`` (and ``/`` of tv.sarcade.org): full-screen read-only page for the TV (served on tv.sarcade.org,
   without Cloudflare Access): asks a pairing code, then shows the event.
 - ``/tv/approve?code=…``: page opened by the QR code on a phone signed in
   (Access); any operator chooses the event and approves.
@@ -232,7 +232,7 @@ h2{font-size:16px;color:#b9c6d2;text-transform:uppercase;letter-spacing:1px;marg
 </style></head><body>
 <div id="pair"><div class="left"><div class="logo"><img src="/tv/logo.png" alt="SARCADE"></div>
 <div class="lead">Afficher SARCADE sur cet écran</div><div id="code">······</div>
-<div class="how">Dans l'application SARCADE : <b>Plus › Afficher sur une TV</b>, puis scannez le QR code ou saisissez ce code.</div>
+<div class="how">Dans l'application SARCADE : <b>Paramètres › Affichage › Écrans</b>, puis scannez le QR code ou saisissez ce code.</div>
 <div id="hint"></div></div><div id="qr"></div></div>
 <div id="app"><header><div class="hlogo"><img src="/tv/logo.png" alt="SARCADE"></div><div id="title"></div><div class="stats"><span><b id="nOps">0</b> opérateurs actifs</span><span><b id="nAprs">0</b> stations APRS</span><span id="link"><span class="dot"></span><span id="linkTxt">Connexion…</span></span></div><div><div id="clock">--:--</div><div id="date"></div></div></header><div id="map"></div><aside><h2>Messages</h2><div id="msgs"></div><h2>Main courante</h2><div id="log"></div></aside></div>
 <div id="alert"></div>
@@ -261,7 +261,7 @@ let lastOk=0;
 function tick(){const d=new Date();$('clock').textContent=d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
 $('date').textContent=d.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'});}
 function linkState(ok){if(ok)lastOk=Date.now();const lost=!ok&&Date.now()-lastOk>30000;$('link').className=lost?'lost':'';
-$('linkTxt').textContent=lost?'Liaison perdue'+(lastOk?' depuis '+hm(lastOk):''):(lastOk?'À jour '+hm(lastOk):'Connexion…');}
+$('linkTxt').textContent=lost?'Liaison perdue'+(lastOk?' depuis '+hm(lastOk):''):(lastOk?'En direct':'Connexion…');}
 async function refresh(){let r;try{r=await fetch('/api/v0.1/tv/state',{headers:{authorization:'Display '+token}});}catch(e){linkState(false);return;}
 if(r.status===401){localStorage.removeItem('sarcade_tv_token');location.reload();return;}if(!r.ok){linkState(false);return;}const s=await r.json();linkState(true);
 $('title').textContent=s.event.name;const pts=[];const now=Date.now();
