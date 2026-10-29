@@ -107,3 +107,33 @@ def snapshot(event: dict, positions: list[dict], messages: list[dict], logbook: 
            if r.get("kind") not in TV_HIDDEN_LOG_KINDS]
     return {"event": {"id": event["id"], "name": event.get("name", "")},
             "positions": positions, "messages": public[-12:], "logbook": log[-12:]}
+
+
+def clean_view(view: dict | None, now: float | None = None) -> dict | None:
+    """View copied from a phone: centre, zoom, base map. The tile address is
+    used by the public TV page, so only an https template is accepted."""
+    if view is None:
+        return None
+    if not isinstance(view, dict):
+        raise ValueError("invalid_view")
+
+    def num(key, lo, hi):
+        v = view.get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
+            raise ValueError(f"invalid_{key}")
+        return float(v)
+
+    def text(key, maximum):
+        v = view.get(key) or ""
+        if not isinstance(v, str) or len(v) > maximum:
+            raise ValueError(f"invalid_{key}")
+        return v.strip()
+
+    url = text("tile_url", 300) or None
+    if url is not None and not (url.startswith("https://") and all(t in url for t in ("{z}", "{x}", "{y}"))
+                                and not any(ch in url for ch in "\"'<> ")):
+        raise ValueError("invalid_tile_url")
+    return {"lat": num("lat", -90, 90), "lon": num("lon", -180, 180), "zoom": round(num("zoom", 1, 20), 2),
+            "basemap": text("basemap", 40), "tile_url": url, "attribution": text("attribution", 200),
+            "rev": int((now if now is not None else time.time()) * 1000)}
+
