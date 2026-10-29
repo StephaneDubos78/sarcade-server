@@ -47,6 +47,7 @@ from sarcade.access import logbook as access_logbook
 from sarcade.access.verify import AccessMiddleware, identity_of
 from . import geocode as geocode_api
 from . import wakeup as wakeup_api
+from . import profile as profile_api
 from sarcade.wakeup import service as wakeup_service
 
 log = logging.getLogger("sarcade.sync")
@@ -96,6 +97,7 @@ app.include_router(access_api.router)
 app.add_middleware(AccessMiddleware)
 app.include_router(geocode_api.router)
 app.include_router(wakeup_api.router)
+app.include_router(profile_api.router)
 
 
 @app.get("/health")
