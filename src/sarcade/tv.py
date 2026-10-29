@@ -6,9 +6,11 @@ that only reads that event. Pure logic and small stores, testable alone."""
 from __future__ import annotations
 
 import hashlib
+import math
 import secrets
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O, 1/I
 CODE_TTL_S = 600
@@ -136,5 +138,213 @@ def clean_view(view: dict | None, now: float | None = None) -> dict | None:
         raise ValueError("invalid_tile_url")
     return {"lat": num("lat", -90, 90), "lon": num("lon", -180, 180), "zoom": round(num("zoom", 1, 20), 2),
             "basemap": text("basemap", 40), "tile_url": url, "attribution": text("attribution", 200),
+            **clean_display_options(view),
             "rev": int((now if now is not None else time.time()) * 1000)}
 
+
+
+# --- « Envoyer ma vue », step 2: layers, opacities, messages panel --------
+
+DEFAULT_LAYERS = {"operators": True, "aprs": True, "offline": True, "drawings": True, "bearings": True,
+                  "highpoints": False, "relays": False}
+DEFAULT_OPACITY = {"ops": 1.0, "draw": 1.0, "brg": 1.0, "ref": 1.0}
+# Same threshold as the « opérateurs actifs » counter of the TV page.
+OFFLINE_AFTER = timedelta(minutes=10)
+
+
+def clean_display_options(view: dict) -> dict:
+    """Layers, opacities and messages panel of a view; unknown keys are
+    dropped, missing keys take the defaults."""
+    layers = view.get("layers")
+    if layers is None:
+        layers = {}
+    if not isinstance(layers, dict):
+        raise ValueError("invalid_layers")
+    out_layers = {}
+    for key, default in DEFAULT_LAYERS.items():
+        v = layers.get(key, default)
+        if not isinstance(v, bool):
+            raise ValueError("invalid_layers")
+        out_layers[key] = v
+    opacity = view.get("opacity")
+    if opacity is None:
+        opacity = {}
+    if not isinstance(opacity, dict):
+        raise ValueError("invalid_opacity")
+    out_opacity = {}
+    for key, default in DEFAULT_OPACITY.items():
+        v = opacity.get(key, default)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0.1 <= v <= 1:
+            raise ValueError("invalid_opacity")
+        out_opacity[key] = round(float(v), 2)
+    messages = view.get("messages", True)
+    if not isinstance(messages, bool):
+        raise ValueError("invalid_messages")
+    return {"layers": out_layers, "opacity": out_opacity, "messages": messages}
+
+
+def display_options(view: dict | None) -> dict:
+    """Options of a stored view (or the defaults: automatic framing, or a
+    view stored before step 2)."""
+    try:
+        return clean_display_options(view or {})
+    except ValueError:
+        return clean_display_options({})
+
+
+def _time(value) -> datetime | None:
+    if isinstance(value, datetime):
+        t = value
+    elif isinstance(value, str):
+        try:
+            t = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    return t.replace(tzinfo=UTC) if t.tzinfo is None else t
+
+
+def apply_view(snap: dict, view: dict | None, now: datetime, *, weather: dict | None = None,
+               drawings: list | None = None, bearings: list | None = None,
+               references: list | None = None) -> dict:
+    """Keeps in the snapshot only what the layers of the view show."""
+    opts = display_options(view)
+    layers = opts["layers"]
+
+    def shown(p: dict) -> bool:
+        if p.get("source") == "aprs":
+            return layers["aprs"]
+        if not layers["operators"]:
+            return False
+        t = _time(p.get("time"))
+        return layers["offline"] or (t is not None and now - t <= OFFLINE_AFTER)
+
+    out = dict(snap)
+    out["positions"] = [p for p in snap.get("positions", []) if shown(p)]
+    # « messages » only hides the panel: the immediate-message banner stays.
+    out["options"] = opts
+    out["weather"] = weather
+    if drawings is not None:
+        out["drawings"] = drawings if layers["drawings"] else []
+    if bearings is not None:
+        out["bearings"] = bearings if layers["bearings"] else []
+    if references is not None:
+        out["references"] = [r for r in references
+                             if (r.get("category") == "HIGH_POINT" and layers["highpoints"])
+                             or (r.get("category") == "RELAY" and layers["relays"])]
+    return out
+
+
+# Colours of the searches (bearings), stable for a given search name.
+SEARCH_COLORS = ("#ff4d5e", "#3dd6f5", "#ffb020", "#3ddc84", "#c77dff", "#ff8c1a", "#4d8dff", "#f06bc4")
+
+
+def search_color(search: str) -> str:
+    if not search:
+        return SEARCH_COLORS[0]
+    return SEARCH_COLORS[int(hashlib.sha1(search.encode()).hexdigest(), 16) % len(SEARCH_COLORS)]
+
+
+def tv_drawing(feature: dict) -> dict:
+    """Map feature as drawn by the TV (no author, no history)."""
+    keep = ("id", "kind", "points", "radius_m", "color", "stroke_width", "label", "opacity")
+    return {k: feature.get(k) for k in keep if feature.get(k) is not None}
+
+
+def tv_bearing(feature: dict) -> dict | None:
+    b = feature.get("bearing") or {}
+    points = feature.get("points") or []
+    if not points or b.get("azimuth_deg") is None:
+        return None
+    search = b.get("search") or ""
+    return {"id": feature.get("id"), "lat": points[0][0], "lon": points[0][1],
+            "azimuth_deg": b["azimuth_deg"], "length_m": b.get("length_m", 10_000),
+            "search": search, "label": feature.get("label") or "", "exercise": bool(b.get("exercise")),
+            "color": search_color(search)}
+
+
+# --- Weather in the top bar -------------------------------------------------
+
+VIGILANCE = {2: "yellow", 3: "orange", 4: "red"}
+
+
+def _icon(code, cloud, night: bool) -> str:
+    code = int(code) if isinstance(code, (int, float)) and not isinstance(code, bool) else None
+    if code in (95, 96, 99):
+        return "storm"
+    if code is not None and (71 <= code <= 77 or code in (85, 86)):
+        return "snow"
+    if code in (45, 48):
+        return "fog"
+    if code is not None and (51 <= code <= 67 or 80 <= code <= 82):
+        return "rain"
+    if code == 3:
+        return "cloud"
+    if code in (1, 2):
+        clear = False
+    elif code == 0:
+        clear = True
+    elif isinstance(cloud, (int, float)):
+        if cloud >= 70:
+            return "cloud"
+        clear = cloud < 25
+    else:
+        clear = True
+    if night:
+        return "moon" if clear else "moon_cloud"
+    return "sun" if clear else "sun_cloud"
+
+
+def is_night(forecast: dict, now: datetime) -> bool:
+    """Between sunset and sunrise, from the sun times of the forecast."""
+    days = []
+    for d in forecast.get("daily") or []:
+        rise, sset = _time(d.get("sunrise")), _time(d.get("sunset"))
+        if rise and sset:
+            days.append((rise, sset))
+    if not days:
+        return False
+    return not any(rise <= now < sset for rise, sset in days)
+
+
+def weather_now(forecast: dict | None, vigilance: dict | None, now: datetime) -> dict | None:
+    """Temperature and icon of the current hour, vigilance colour; None
+    without a forecast for this hour."""
+    if not forecast:
+        return None
+    hour = now.replace(minute=0, second=0, microsecond=0)
+    current = None
+    for h in forecast.get("hourly") or []:
+        t = _time(h.get("time"))
+        if t is not None and hour <= t + timedelta(hours=1) and t <= now and (current is None or t > current[0]):
+            current = (t, h)
+    if current is None:
+        return None
+    h = current[1]
+    temp = h.get("temperature_c")
+    if isinstance(temp, bool) or not isinstance(temp, (int, float)):
+        return None
+    color = (vigilance or {}).get("color_id")
+    return {"temp_c": round(float(temp), 1), "icon": _icon(h.get("weather_code"), h.get("cloud_cover_pct"), is_night(forecast, now)),
+            "vigilance": VIGILANCE.get(color) if isinstance(color, int) else None}
+
+
+@dataclass
+class WeatherCache:
+    """Weather of each event computed at most every 10 minutes: the TV polls
+    every 10 s, the forecast changes every hour."""
+    ttl_s: float = 600
+    entries: dict = field(default_factory=dict)
+
+    def get(self, event_id: str, compute, now: float | None = None):
+        now = now if now is not None else time.time()
+        hit = self.entries.get(event_id)
+        if hit is not None and now - hit[0] < self.ttl_s:
+            return hit[1]
+        value = compute()
+        self.entries[event_id] = (now, value)
+        return value
+
+
+weather_cache = WeatherCache()

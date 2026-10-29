@@ -85,7 +85,8 @@ def test_view_sent_by_a_phone_is_checked():
     v = tv.clean_view({"lat": 48.8, "lon": 2.1, "zoom": 14.333, "basemap": "ign",
                        "tile_url": "https://data.geopf.fr/wmts/{z}/{x}/{y}", "attribution": "IGN"}, now=1)
     assert v == {"lat": 48.8, "lon": 2.1, "zoom": 14.33, "basemap": "ign",
-                 "tile_url": "https://data.geopf.fr/wmts/{z}/{x}/{y}", "attribution": "IGN", "rev": 1000}
+                 "tile_url": "https://data.geopf.fr/wmts/{z}/{x}/{y}", "attribution": "IGN", "rev": 1000,
+                 "layers": tv.DEFAULT_LAYERS, "opacity": tv.DEFAULT_OPACITY, "messages": True}
     assert tv.clean_view(None) is None
     import pytest
     for bad in ({"lat": 99, "lon": 2, "zoom": 10}, {"lat": 1, "lon": 2, "zoom": 30},
@@ -94,3 +95,127 @@ def test_view_sent_by_a_phone_is_checked():
                 {"lat": 1, "lon": 2, "zoom": 10, "tile_url": "javascript:alert(1)"}):
         with pytest.raises(ValueError):
             tv.clean_view(bad)
+
+
+# --- Step 2 of « Envoyer ma vue », weather in the top bar (29 Oct 2026) -----
+
+from datetime import UTC, datetime, timedelta  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+import pytest  # noqa: E402
+
+VIEW = {"lat": 48.8, "lon": 2.1, "zoom": 12}
+
+
+def test_view_layers_opacity_and_messages():
+    v = tv.clean_view({**VIEW, "layers": {"aprs": False, "relays": True, "nope": True},
+                       "opacity": {"draw": 0.5, "brg": 1}, "messages": False, "extra": 1}, now=1)
+    assert v["layers"] == {**tv.DEFAULT_LAYERS, "aprs": False, "relays": True}
+    assert v["opacity"] == {"ops": 1.0, "draw": 0.5, "brg": 1.0, "ref": 1.0}
+    assert v["messages"] is False and "extra" not in v
+    d = tv.clean_view(VIEW, now=1)
+    assert d["layers"] == {"operators": True, "aprs": True, "offline": True, "drawings": True,
+                           "bearings": True, "highpoints": False, "relays": False}
+    assert d["messages"] is True
+    # Automatic framing (no view) and views stored before step 2: defaults.
+    assert tv.display_options(None)["layers"] == tv.DEFAULT_LAYERS
+    assert tv.display_options({"lat": 1})["opacity"] == tv.DEFAULT_OPACITY
+
+
+@pytest.mark.parametrize("extra", [{"layers": []}, {"layers": {"aprs": "non"}}, {"opacity": {"ops": 0}},
+                                   {"opacity": {"ref": 1.5}}, {"opacity": {"draw": True}}, {"opacity": 1},
+                                   {"messages": "oui"}])
+def test_invalid_view_options(extra):
+    with pytest.raises(ValueError):
+        tv.clean_view({**VIEW, **extra})
+
+
+NOW = datetime(2026, 10, 29, 14, 20, tzinfo=UTC)
+
+
+def test_hidden_layers_are_respected():
+    old = (NOW - timedelta(minutes=30)).isoformat()
+    snap = {"positions": [{"device_id": "A", "source": "device", "time": NOW}, {"device_id": "B", "source": "device", "time": old},
+                          {"device_id": "aprs:F4X", "source": "aprs", "time": NOW}],
+            "messages": [{"body": "x"}]}
+    drawings, bearings = [{"kind": "zone"}], [{"azimuth_deg": 10}]
+    refs = [{"category": "HIGH_POINT", "name": "PH"}, {"category": "RELAY", "name": "R"}]
+    out = tv.apply_view(snap, None, NOW, drawings=drawings, bearings=bearings, references=refs)
+    assert [p["device_id"] for p in out["positions"]] == ["A", "B", "aprs:F4X"]
+    assert out["drawings"] == drawings and out["bearings"] == bearings and out["references"] == []
+    view = tv.clean_view({**VIEW, "layers": {"offline": False, "aprs": False, "drawings": False, "bearings": False,
+                                             "highpoints": True}, "messages": False})
+    out = tv.apply_view(snap, view, NOW, drawings=drawings, bearings=bearings, references=refs)
+    assert [p["device_id"] for p in out["positions"]] == ["A"]
+    assert out["drawings"] == [] and out["bearings"] == [] and [r["name"] for r in out["references"]] == ["PH"]
+    assert out["options"]["messages"] is False and out["messages"] == [{"body": "x"}]   # banner kept
+    view = tv.clean_view({**VIEW, "layers": {"operators": False}})
+    assert [p["device_id"] for p in tv.apply_view(snap, view, NOW)["positions"]] == ["aprs:F4X"]
+    assert "drawings" not in tv.apply_view(snap, view, NOW)                # unchanged: not sent again
+
+
+def test_bearing_for_the_tv():
+    f = {"id": "b1", "points": [[48.8, 2.1]], "label": "",
+         "bearing": {"azimuth_deg": 45, "length_m": 8000, "search": "Balise Rambouillet", "exercise": True}}
+    b = tv.tv_bearing(f)
+    assert b["lat"] == 48.8 and b["azimuth_deg"] == 45 and b["exercise"] is True
+    assert b["color"] == tv.search_color("Balise Rambouillet") in tv.SEARCH_COLORS
+    assert tv.tv_bearing({**f, "bearing": {**f["bearing"], "exercise": None}})["exercise"] is False
+    assert tv.tv_drawing({"id": "z", "kind": "zone", "points": [[1, 2]], "color": 1, "created_by": "x"}) == {
+        "id": "z", "kind": "zone", "points": [[1, 2]], "color": 1}
+
+
+def forecast(code=0, cloud=10, temp=12.4):
+    hours = [{"time": f"2026-10-29T{h:02d}:00:00Z", "temperature_c": temp + h / 100, "weather_code": code,
+              "cloud_cover_pct": cloud} for h in range(24)]
+    return {"hourly": hours, "daily": [{"date": "2026-10-29", "sunrise": "2026-10-29T06:30:00Z",
+                                        "sunset": "2026-10-29T16:50:00Z"}]}
+
+
+def test_weather_of_the_current_hour():
+    w = tv.weather_now(forecast(), None, NOW)
+    assert w == {"temp_c": 12.5, "icon": "sun", "vigilance": None}
+    night = NOW.replace(hour=21)
+    assert tv.weather_now(forecast(), None, night)["icon"] == "moon"
+    assert tv.weather_now(forecast(code=2), None, night)["icon"] == "moon_cloud"
+    assert tv.weather_now(forecast(code=2), None, NOW)["icon"] == "sun_cloud"
+    for code, icon in ((3, "cloud"), (61, "rain"), (81, "rain"), (95, "storm"), (73, "snow"), (45, "fog")):
+        assert tv.weather_now(forecast(code=code), None, NOW)["icon"] == icon
+    assert tv.weather_now(forecast(code=None, cloud=90), None, NOW)["icon"] == "cloud"
+    assert tv.weather_now(forecast(), {"color_id": 3}, NOW)["vigilance"] == "orange"
+    assert tv.weather_now(forecast(), {"color_id": 4}, NOW)["vigilance"] == "red"
+    assert tv.weather_now(forecast(), {"color_id": 2}, NOW)["vigilance"] == "yellow"
+    assert tv.weather_now(forecast(), {"color_id": 1}, NOW)["vigilance"] is None
+    assert tv.weather_now(None, None, NOW) is None
+    assert tv.weather_now(forecast(), None, NOW + timedelta(days=3)) is None   # outdated forecast
+
+
+def test_snapshot_weather_from_the_weather_cache(monkeypatch):
+    cache = {"event:e1": SimpleNamespace(data=forecast(code=61)), "vigilance:e1": SimpleNamespace(data={"color_id": 3})}
+    calls = []
+
+    def fake_get(db, key):
+        calls.append(key)
+        return cache.get(key)
+    monkeypatch.setattr(api.weather_service, "cache_get", fake_get)
+    monkeypatch.setattr(tv, "weather_cache", tv.WeatherCache())
+    monkeypatch.setattr(api, "datetime", SimpleNamespace(now=lambda tz=None: NOW))
+    w = api._weather(None, "e1")
+    assert w == {"temp_c": 12.5, "icon": "rain", "vigilance": "orange"}
+    api._weather(None, "e1")
+    assert calls == ["event:e1", "vigilance:e1"]                 # kept 10 minutes
+    assert api._weather(None, "no-point") is None                # event without weather point
+
+
+def test_weather_cache_expires_after_ten_minutes():
+    c = tv.WeatherCache()
+    values = iter([1, 2])
+    assert c.get("e", lambda: next(values), now=0) == 1
+    assert c.get("e", lambda: next(values), now=599) == 1
+    assert c.get("e", lambda: next(values), now=601) == 2
+
+
+def test_tv_page_draws_the_layers_with_escaped_texts():
+    for needle in ("drawFeatures", "drawBearings", "drawRefs", "EXERCICE", "msgBox", 'id="wx"',
+                   "esc(f.label)", "esc(name)", "esc(r.callsign||r.name)"):
+        assert needle in api._TV
