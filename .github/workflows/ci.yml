@@ -87,6 +87,9 @@ jobs:
       - name: Verify move orders (PCO sends an operator to a point)
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_move_orders.py"
+      - name: Verify points of interest (author, rename, delete, logbook)
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_pois.py"
       - name: Verify navigation (routing stand-in, closed roads, route legs, shared itineraries)
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_navigation.py"
