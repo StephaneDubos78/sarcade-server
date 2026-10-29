@@ -345,3 +345,12 @@ class WakeKeyRow(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     private_pem: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class UserPreferencesRow(Base):
+    """Personal settings of a user (favourites, preferred colour), keyed by
+    the email checked by Cloudflare Access, lower case."""
+    __tablename__ = "user_preferences"
+    email: Mapped[str] = mapped_column(String(320), primary_key=True)
+    data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
