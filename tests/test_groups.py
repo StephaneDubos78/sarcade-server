@@ -68,11 +68,13 @@ def test_group_references_in_recipients():
 
 def test_default_groups_match_the_validated_list():
     groups = g.default_groups(EVENT, NOW)
-    assert [x["name"] for x in groups] == ["Tous", "Diffusion PCO", "PCO", "Équipes terrain",
-                                           "Transmissions", "Logistique"]
+    # 28 Oct 2026: a new event has « Tous » and « Diffusion PCO » only.
+    assert [x["name"] for x in groups] == ["Tous", "Diffusion PCO"]
     diffusion = groups[1]
     assert diffusion["mode"] == "listen_only" and diffusion["senders"] == ["PCO"]
-    assert len({x["id"] for x in groups}) == 6
+    model = g.default_groups(EVENT, NOW, "adrasec")
+    assert [x["name"] for x in model] == ["PCO", "Équipes terrain", "Transmissions", "Logistique"]
+    assert len({x["id"] for x in groups + model}) == 6
     assert g.default_groups(EVENT, NOW)[0]["id"] == groups[0]["id"], "ids are stable"
     assert g.default_groups("evt-2", NOW)[0]["id"] != groups[0]["id"]
 

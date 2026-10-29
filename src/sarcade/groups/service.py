@@ -147,10 +147,18 @@ def group_refs(recipient_ids) -> list[str]:
             if isinstance(r, str) and r.startswith(GROUP_PREFIX)]
 
 
-def default_groups(event_id: str, now: datetime) -> list[dict]:
-    """Canonical data of the ADRASEC default groups of an event."""
+# Channels of every new event (decision of 28 Oct 2026): « Tous » and
+# « Diffusion PCO »; the others come from a model added in one touch.
+BASE_KEYS = ("tous", "diffusion-pco")
+TEMPLATES = {"adrasec": ("pco", "equipes-terrain", "transmissions", "logistique")}
+
+
+def default_groups(event_id: str, now: datetime, template: str | None = None) -> list[dict]:
+    """Canonical data of the default channels of an event: the two base
+    channels, or the channels of a model (``adrasec``)."""
+    keys = BASE_KEYS if template is None else TEMPLATES[template]
     groups = []
-    for template in DEFAULT_GROUPS:
+    for template in (t for t in DEFAULT_GROUPS if t["key"] in keys):
         gid = default_group_id(event_id, template["key"])
         groups.append({
             "id": gid, "event_id": event_id, "name": template["name"],
