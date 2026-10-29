@@ -87,6 +87,9 @@ jobs:
       - name: Verify routes with waypoints
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_routes.py"
+      - name: Verify readable location (nearest commune offline, nearest road stand-in)
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_places.py"
       - name: Verify move orders (PCO sends an operator to a point)
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_move_orders.py"

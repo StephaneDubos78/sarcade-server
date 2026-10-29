@@ -112,6 +112,11 @@ class Handler(BaseHTTPRequestHandler):
             body = VIGILANCE
         elif path == "/releases/latest":
             body = {"tag_name": "v9.9.0", "html_url": "https://example.invalid/releases/v9.9.0"}
+        elif path == "/geocodage/reverse":
+            body = {"type": "FeatureCollection", "features": [{"geometry": {"type": "Point",
+                    "coordinates": [1.9097, 48.8232]}, "properties": {"street": "Rue des Côteaux de Chatron",
+                    "label": "Rue des Côteaux de Chatron 78640 Saint-Germain-de-la-Grange",
+                    "city": "Saint-Germain-de-la-Grange", "postcode": "78640"}}]}
         elif path == "/siem/received":
             body = list(SIEM_RECEIVED)
         else:
