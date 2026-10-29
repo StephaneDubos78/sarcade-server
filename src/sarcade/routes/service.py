@@ -20,7 +20,7 @@ import math
 from sarcade.features.service import InvalidFeature, parse_time
 from sarcade.groups.service import is_pco
 
-TYPES = {"route", "route_waypoint", "route_passage", "road_closure", "itinerary"}
+TYPES = {"route", "route_waypoint", "route_passage", "road_closure", "itinerary", "move_order"}
 NAV_MODES = {"car", "foot", "offroad"}
 WAYPOINT_TYPES = {"start", "pass", "checkpoint", "supply", "finish"}
 LEG_MODES = {"straight", "paths"}
@@ -197,8 +197,57 @@ def validate_itinerary(payload: dict, *, event_id: str, object_id: str) -> dict:
     return data
 
 
+# Order of the PCO to one operator: go to a point of the map (decision of
+# the porteur, 29 Oct 2026). The operator answers accepted / refused /
+# arrived; the PCO (or the author) can cancel.
+MOVE_ORDER_STATUSES = {"sent", "accepted", "refused", "arrived", "cancelled"}
+MOVE_ORDER_ANSWERS = {"accepted", "refused", "arrived"}
+
+
+def validate_move_order(payload: dict, *, event_id: str, object_id: str) -> dict:
+    data = _meta(payload, event_id, object_id)
+    status = payload.get("status", "sent")
+    if status not in MOVE_ORDER_STATUSES:
+        raise InvalidFeature("invalid_status")
+    dest = payload.get("destination") or {}
+    if not isinstance(dest, dict):
+        raise InvalidFeature("invalid_destination")
+    data.update({
+        "target_id": _text(payload.get("target_id"), "target_id", 64, required=True),
+        "status": status,
+        "destination": {"lat": _coord(dest.get("lat"), 90, "destination"),
+                        "lon": _coord(dest.get("lon"), 180, "destination"),
+                        "label": _text(dest.get("label"), "destination", 120)},
+        "note": _text(payload.get("note"), "note", 200),
+    })
+    return data
+
+
+def move_order_allowed(before: dict | None, created_by: str | None, change: dict, actor: str,
+                       action: str, pco: bool) -> bool:
+    """The PCO gives the order; the operator only answers it (same order,
+    status accepted / refused / arrived); the PCO or the author changes or
+    cancels it."""
+    if before is None:
+        return pco and action != "delete"
+    if pco or actor == created_by:
+        return True
+    return (action != "delete" and actor == before.get("target_id")
+            and change.get("status") in MOVE_ORDER_ANSWERS
+            and change.get("target_id") == before.get("target_id")
+            and change.get("destination") == before.get("destination")
+            and change.get("note", "") == before.get("note", ""))
+
+
+def move_order_text(data: dict) -> str:
+    d = data.get("destination") or {}
+    label = d.get("label") or "point désigné"
+    text = f"📍 Ordre de déplacement : rejoindre « {label} » ({d.get('lat', 0):.5f}, {d.get('lon', 0):.5f})"
+    return f"{text} — {data['note']}" if data.get("note") else text
+
+
 VALIDATORS = {"route": validate_route, "route_waypoint": validate_waypoint, "route_passage": validate_passage,
-              "road_closure": validate_closure, "itinerary": validate_itinerary}
+              "road_closure": validate_closure, "itinerary": validate_itinerary, "move_order": validate_move_order}
 
 
 def is_assigned(route_data: dict | None) -> bool:
