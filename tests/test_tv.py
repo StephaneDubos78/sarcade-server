@@ -45,3 +45,11 @@ def test_tv_address_exposes_the_display_only():
     assert not api.tv_host_allows("/tv/approve")
     assert not api.tv_host_allows("/api/v0.1/events")
     assert not api.tv_host_allows("/")
+
+
+def test_tv_logbook_hides_acks_and_messages():
+    s = tv.snapshot({"id": "e", "name": "Exercice"}, [], [], [
+        {"kind": "ack", "summary": "received: 5411"}, {"kind": "message", "summary": "message privé"},
+        {"kind": "display", "summary": "Écran d'affichage appairé"}, {"kind": "settings", "summary": "Seuil modifié"}])
+    assert [r["summary"] for r in s["logbook"]] == ["Écran d'affichage appairé", "Seuil modifié"]
+    assert all("kind" not in r for r in s["logbook"])
