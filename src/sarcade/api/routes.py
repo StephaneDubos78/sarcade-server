@@ -316,3 +316,24 @@ async def report_waypoint(event_id: str, route_id: str, payload: Report, db: Ses
             "reason": payload.reason.strip(), "summary": text, "time": features.iso(now)}
     await manager.broadcast(event_id, {"type": "route.report", "data": data})
     return data
+
+
+def geofence_alerts(db: Session, event_id: str, device_id: str, lat: float, lon: float, now: datetime) -> list[dict]:
+    """Géorepérage: urgent message to the PCO and logbook line when a device
+    enters or leaves a fenced zone. Returns realtime payloads to broadcast."""
+    from sarcade import geofence
+    from sarcade.db.models import MapFeatureRow
+    rows = db.scalars(select(MapFeatureRow).where(MapFeatureRow.event_id == event_id, MapFeatureRow.deleted_at.is_(None),
+                                                  MapFeatureRow.kind.in_(geofence.KINDS))).all()
+    fences = [{**r.data, "id": r.id} for r in rows if (r.data or {}).get("geofence") is True]
+    payloads = []
+    for fence, entered in geofence.transitions(event_id, device_id, lat, lon, fences):
+        body = geofence.message(device_id, fence, entered)
+        msg = MessageRow(id=str(uuid.uuid4()), event_id=event_id, sender_id=SYSTEM_SENDER,
+                         recipient_ids=["PCO"], priority="urgent", body=body, attachments=None, created_at=now)
+        db.add(msg)
+        db.add(LogbookRow(event_id=event_id, kind="geofence", object_id=fence["id"], actor_id=device_id, summary=body, time=now))
+        payloads.append({"type": "message.created", "data": {
+            "id": msg.id, "event_id": event_id, "sender_id": SYSTEM_SENDER, "recipient_ids": ["PCO"],
+            "priority": "urgent", "body": body, "attachments": [], "created_at": features.iso(now)}})
+    return payloads

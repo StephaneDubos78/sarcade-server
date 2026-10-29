@@ -49,6 +49,7 @@ from . import geocode as geocode_api
 from . import wakeup as wakeup_api
 from . import profile as profile_api
 from . import roles as roles_api
+from . import tv as tv_api
 from sarcade.wakeup import service as wakeup_service
 
 log = logging.getLogger("sarcade.sync")
@@ -84,6 +85,16 @@ async def no_store_for_api(request, call_next):
         response.headers["Cache-Control"] = "no-store"
     return response
 
+@app.middleware("http")
+async def tv_host_only_display(request, call_next):
+    """tv.* (Smart TV, no Cloudflare Access): only the display page and its
+    pairing and reading API answer; everything else is « not found »."""
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host.startswith("tv.") and not tv_api.tv_host_allows(request.url.path):
+        return JSONResponse({"detail": "not_found"}, status_code=404)
+    return await call_next(request)
+
+
 app.include_router(event_ops.router)
 app.include_router(groups_api.router)
 app.include_router(aprs_api.router)
@@ -100,6 +111,7 @@ app.include_router(geocode_api.router)
 app.include_router(wakeup_api.router)
 app.include_router(profile_api.router)
 app.include_router(roles_api.router)
+app.include_router(tv_api.router)
 
 
 @app.get("/health")
@@ -150,8 +162,25 @@ async def ingest_position(payload: PositionCreate, db: Session = Depends(get_db)
     aprs_service.queue_transmission(db.get(EventRow, payload.event_id).settings, device,
                                     payload.lat, payload.lon, datetime.now(UTC))
     data = position_dict(row)
+    alerts = _geofence(db, payload.event_id, {"device_id": payload.device_id, "lat": payload.lat, "lon": payload.lon},
+                       datetime.now(UTC))
+    db.commit()
     await manager.broadcast(payload.event_id, {"type": "position.updated", "data": data})
+    for alert in alerts:
+        await manager.broadcast(payload.event_id, alert)
+        task = asyncio.create_task(wakeup_service.wake_for_message(payload.event_id, alert.get("data") or {}))
+        _wake_tasks.add(task)
+        task.add_done_callback(_wake_tasks.discard)
     return {"status": "accepted", "id": payload.id}
+
+
+def _geofence(db: Session, event_id: str, p: dict, now: datetime) -> list[dict]:
+    """Géorepérage alerts of a new position; never blocks the position."""
+    try:
+        return routes_api.geofence_alerts(db, event_id, str(p["device_id"]), float(p["lat"]), float(p["lon"]), now)
+    except Exception:  # noqa: BLE001
+        log.exception("geofence check failed")
+        return []
 
 
 @app.get("/api/v0.1/events/{event_id}/positions/latest", response_model=list[PositionOut])
@@ -637,6 +666,8 @@ async def synchronize(operations: list[dict], request: Request, db: Session = De
             continue
         if message:
             broadcasts.append((op.event_id, message))
+            if message.get("type") == "position.updated":
+                broadcasts.extend((op.event_id, x) for x in _geofence(db, op.event_id, op.payload, now))
         if identity is not None and status == "accepted":
             actor = access_logbook.actor_of(op.object_type, op.payload)
             if actor and (op.event_id, actor) not in seen_actors:
