@@ -12,7 +12,7 @@ SARCADE coordonne les bénévoles ADRASEC (radioamateurs, sécurité civile) : c
 4. Commandes à exécuter par le porteur : **un seul bloc copiable par machine**, avec le **résultat attendu**.
 5. Une branche et une PR par sujet ; **fusion seulement après accord du porteur et CI verte**.
    **Une fusion n'est pas une recette** : après fusion, la carte du Kanban va en « À recetter » ; elle ne passe en « Validé » que sur confirmation du porteur.
-6. Commits signés `SDUBOS Consulting <github@sdubos.com>` (identité git du dépôt).
+6. Commits signés `SDUBOS Consulting <github@sdubos.com>` (identité git du dépôt), et **certifiés DCO** : `git commit -s` ajoute `Signed-off-by: SDUBOS Consulting <github@sdubos.com>` (contrôle « DCO » de la CI, voir `CONTRIBUTING.md`).
 7. Tenir le coffre à jour après chaque étape : note de spécification (statut), Kanban, fiche de test.
 
 ## Lancer les tests

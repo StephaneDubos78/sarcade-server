@@ -15,6 +15,7 @@ from sarcade.aprs.service import event_callsigns, runtime
 from sarcade.db.models import AprsGroupRow, EventRow
 
 from .deps import get_db
+from .roles import require_pco
 
 router = APIRouter(prefix="/api/v0.1")
 
@@ -49,7 +50,7 @@ def list_groups(db: Session = Depends(get_db)):
 
 
 @router.post("/aprs/groups", status_code=201)
-def create_group(payload: GroupIn, db: Session = Depends(get_db)):
+def create_group(payload: GroupIn, db: Session = Depends(get_db), _pco=Depends(require_pco)):
     now = datetime.now(UTC)
     row = AprsGroupRow(id=str(uuid.uuid4()), name=payload.name.strip(), callsigns=_clean(payload),
                        created_at=now, updated_at=now, updated_by=payload.actor_id)
@@ -59,7 +60,7 @@ def create_group(payload: GroupIn, db: Session = Depends(get_db)):
 
 
 @router.put("/aprs/groups/{group_id}")
-def update_group(group_id: str, payload: GroupIn, db: Session = Depends(get_db)):
+def update_group(group_id: str, payload: GroupIn, db: Session = Depends(get_db), _pco=Depends(require_pco)):
     row = db.get(AprsGroupRow, group_id)
     if row is None:
         raise HTTPException(status_code=404, detail="aprs_group_not_found")
@@ -70,7 +71,7 @@ def update_group(group_id: str, payload: GroupIn, db: Session = Depends(get_db))
 
 
 @router.delete("/aprs/groups/{group_id}", status_code=204)
-def delete_group(group_id: str, db: Session = Depends(get_db)):
+def delete_group(group_id: str, db: Session = Depends(get_db), _pco=Depends(require_pco)):
     row = db.get(AprsGroupRow, group_id)
     if row is None:
         raise HTTPException(status_code=404, detail="aprs_group_not_found")

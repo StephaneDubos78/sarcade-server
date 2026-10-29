@@ -70,3 +70,21 @@ def test_device_status_uses_alert_threshold():
     assert s.device_status(now - timedelta(minutes=4), {}, now) == "ok"
     assert s.device_status(now - timedelta(minutes=6), {}, now) == "late"
     assert s.device_status(now - timedelta(minutes=6), {"sync_alert_minutes": 10}, now) == "ok"
+
+
+def test_pco_chooses_the_radio_callsign_and_the_old_threshold():
+    new = s.apply_patch(None, {"aprs_tx_callsign": "f4jpo", "position_old_min": 60})
+    assert new["aprs_tx_callsign"] == "F4JPO" and new["position_old_min"] == 60
+    lines = s.logbook_summaries(None, new)
+    assert any("F4JPO" in x for x in lines) and any("1 min" in x or "60 min" in x or "1 h" in x for x in lines)
+    with pytest.raises(s.InvalidSettings):
+        s.apply_patch(None, {"aprs_tx_callsign": "pas valide !"})
+    with pytest.raises(s.InvalidSettings):
+        s.apply_patch(None, {"position_old_min": 5})
+
+
+def test_pco_sets_the_predefined_messages():
+    new = s.apply_patch(None, {"quick_messages": [" En place ", "Signal entendu", "En place"]})
+    assert new["quick_messages"] == ["En place", "Signal entendu"]
+    with pytest.raises(s.InvalidSettings):
+        s.apply_patch(None, {"quick_messages": ["x" * 121]})
