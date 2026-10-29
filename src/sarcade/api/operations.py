@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from sarcade.updates import service as updates_service
 from sarcade.aprs import callsigns as calls
 from sarcade.db.models import DeviceRow, EventRow, LogbookRow
+from sarcade.events import contacts as event_contacts
 from sarcade.events import settings as event_settings
 from sarcade.realtime.manager import manager
 
@@ -74,17 +75,22 @@ def device_dict(row: DeviceRow, settings: dict, now: datetime) -> dict:
         "tracking_enabled": row.tracking_enabled, "tracking_interval_s": row.tracking_interval_s,
         "callsign": row.callsign, "aprs_tx_consent": row.aprs_tx_consent,
         "last_contact_at": utc(row.last_contact_at), "last_position_at": utc(row.last_position_at),
+        # Same as last_contact_at, under the name used by the operators list.
+        "last_seen": utc(row.last_contact_at),
         "status": event_settings.device_status(row.last_contact_at, settings, now),
     }
 
 
 def touch_device(db: Session, event_id: str, device_id: str, now: datetime, *,
                  position_time: datetime | None = None, battery_pct: int | None = None) -> DeviceRow:
-    """Records a contact from a device (heartbeat, position, sync)."""
+    """Records a contact from a device (heartbeat, position, sync), and its
+    arrival or return in the logbook (sarcade.events.contacts)."""
     row = db.get(DeviceRow, (event_id, device_id))
-    if row is None:
+    new = row is None
+    if new:
         row = DeviceRow(event_id=event_id, device_id=device_id)
         db.add(row)
+    event_contacts.on_contact(db, event_id, device_id, None if new else row.last_contact_at, now, new=new)
     row.last_contact_at = now
     if position_time is not None and (row.last_position_at is None or position_time > row.last_position_at):
         row.last_position_at = position_time
@@ -184,6 +190,7 @@ async def heartbeat(event_id: str, device_id: str, payload: Heartbeat, db: Sessi
                 raise HTTPException(status_code=422, detail="invalid_callsign")
         else:
             row.callsign = None
+    event_contacts.on_version(db, row, payload.app_version, payload.label, payload.platform, now)
     for field in ("label", "platform", "app_version", "pending_count",
                   "oldest_pending_at", "tracking_enabled", "aprs_tx_consent"):
         value = getattr(payload, field)

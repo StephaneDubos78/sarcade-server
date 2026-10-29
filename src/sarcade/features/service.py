@@ -159,6 +159,14 @@ def validate_bearing(raw) -> dict:
     for key in ("magnetic_deg", "declination_deg", "accuracy_m"):
         if raw.get(key) is not None:
             out[key] = _num(raw.get(key), -360, 100_000, f"invalid_{key}")
+    # Exercise signal (kept only when true) and frequency listened to.
+    exercise = raw.get("exercise")
+    if exercise is not None and not isinstance(exercise, bool):
+        raise InvalidFeature("invalid_exercise")
+    if exercise:
+        out["exercise"] = True
+    if raw.get("frequency_mhz") is not None:
+        out["frequency_mhz"] = _num(raw.get("frequency_mhz"), 1, 10_000, "invalid_frequency")
     return out
 
 
@@ -257,7 +265,7 @@ def feature_geojson(row) -> dict:
     return {"type": "Feature", "id": row.id, "geometry": geometry, "properties": properties}
 
 
-def logbook_summary(kind: str, label: str, action: str) -> str:
+def logbook_summary(kind: str, label: str, action: str, *, exercise: bool = False) -> str:
     names = {"point": "Point", "line": "Ligne", "arrow": "Flèche", "circle": "Cercle",
              "rectangle": "Rectangle", "zone": "Zone", "text": "Texte", "freehand": "Tracé libre",
              "measure": "Mesure", "bearing": "Relevé"}
@@ -265,7 +273,8 @@ def logbook_summary(kind: str, label: str, action: str) -> str:
     if label:
         what += f" « {label} »"
     verb = {"create": "créé", "delete": "supprimé", "restore": "restauré"}.get(action, "modifié")
-    return f"Objet cartographique {verb} : {what}"
+    text = f"Objet cartographique {verb} : {what}"
+    return f"EXERCICE · {text}" if exercise and kind == "bearing" else text
 
 
 def utcnow() -> datetime:
