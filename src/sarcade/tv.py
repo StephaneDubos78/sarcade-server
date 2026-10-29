@@ -95,8 +95,9 @@ def valid_display(displays: list[dict], token: str, now: float | None = None) ->
 
 # Logbook lines never shown on a TV: acknowledgements are technical traces
 # (« received: <id> »), and message lines would repeat the messages panel
-# and could reveal direct chats or channels.
-TV_HIDDEN_LOG_KINDS = frozenset({"ack", "message"})
+# and could reveal direct chats or channels. Device versions and contact
+# lines are technical, for the PCO only.
+TV_HIDDEN_LOG_KINDS = frozenset({"ack", "message", "device_version", "contact"})
 
 
 def snapshot(event: dict, positions: list[dict], messages: list[dict], logbook: list[dict]) -> dict:

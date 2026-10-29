@@ -34,3 +34,7 @@ Création, suppression et restauration sont journalisées. Les modifications ne 
 
 ## Vérification
 `demo/verify_map_features.py`, exécuté par la CI contre PostgreSQL/PostGIS.
+
+## Relevés goniométriques (`kind: "bearing"`)
+
+Le bloc `bearing` accepte aussi `exercise` (booléen, conservé seulement s'il est vrai) et `frequency_mhz` (1 à 10 000, facultatif). Un relevé d'exercice est inscrit en main courante avec le préfixe « EXERCICE · ».

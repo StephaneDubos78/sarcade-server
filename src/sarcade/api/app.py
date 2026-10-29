@@ -53,6 +53,8 @@ from . import roles as roles_api
 from sarcade import roles as user_roles
 from . import tv as tv_api
 from sarcade.wakeup import service as wakeup_service
+from sarcade.events import contacts as event_contacts
+from . import signals as signals_api
 
 log = logging.getLogger("sarcade.sync")
 
@@ -69,6 +71,7 @@ async def lifespan(_app):
     updates_service.start(_background_tasks)
     licensing.start(_background_tasks)
     siem.start(_background_tasks)
+    event_contacts.start(_background_tasks)
     yield
     for task in _background_tasks:
         task.cancel()
@@ -117,6 +120,7 @@ app.include_router(profile_api.router)
 app.include_router(personal_files_api.router)
 app.include_router(roles_api.router)
 app.include_router(tv_api.router)
+app.include_router(signals_api.router)
 
 
 @app.get("/health")
@@ -518,7 +522,8 @@ def _apply_map_feature(db: Session, op, now: datetime) -> tuple[str, int, dict |
     if logbook_action:
         db.add(LogbookRow(event_id=op.event_id, kind="map_feature", object_id=row.id,
             actor_id=change["updated_by"], time=now,
-            summary=features.logbook_summary(row.kind, (row.data or {}).get("label", ""), logbook_action)))
+            summary=features.logbook_summary(row.kind, (row.data or {}).get("label", ""), logbook_action,
+                                             exercise=bool(((row.data or {}).get("bearing") or {}).get("exercise")))))
     kind = "map_feature.deleted" if row.deleted_at is not None else "map_feature.upserted"
     return "accepted", cursor, {"type": kind, "data": result}
 

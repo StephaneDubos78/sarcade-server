@@ -45,6 +45,16 @@ body = hb.json()
 check(body["settings"]["low_bandwidth"] is True and body["tracking_required"] is True,
       "heartbeat returns the settings to apply")
 check(body["tracking_interval_s"] == 30, "tracking interval clamped to the PCO minimum")
+c.post(f"{E}/devices/TEL-01/heartbeat", json={"app_version": "0.1.0+414"})
+c.post(f"{E}/devices/TEL-01/heartbeat", json={"app_version": "0.1.0+415"})
+kinds = {(x["kind"], x["summary"]) for x in c.get(f"{E}/logbook").json()}
+check(("contact", "Arrivée dans l'événement") in kinds, "logbook: arrival of the device")
+check(("device_version", "Équipe 1 : SARCADE 0.1.0+414 → 0.1.0+415 (android)") in kinds,
+      "logbook: application version change")
+sig = c.get(f"{BASE}/api/v0.1/signals/defaults").json()["signals"]
+check(sig[0]["frequency_mhz"] == 121.5 and len(sig) == 3, "default signals of the bearing tool")
+check(c.put(f"{BASE}/api/v0.1/signals/defaults", json={"signals": sig}).status_code == 403,
+      "default signals edited by an administrator only")
 
 pid = str(uuid.uuid4())
 now = datetime.now(timezone.utc)
@@ -60,6 +70,8 @@ check(latest["TEL-02"]["battery_pct"] == 42 and latest["TEL-02"]["source"] == "d
 
 devices = {d["device_id"]: d for d in c.get(f"{E}/devices").json()}
 check(set(devices) == {"TEL-01", "TEL-02"}, "both devices listed for the PCO")
+check(devices["TEL-01"]["app_version"] == "0.1.0+415" and devices["TEL-01"]["last_seen"],
+      "version and last contact in the operators list")
 check(devices["TEL-01"]["pending_count"] == 3 and devices["TEL-01"]["status"] == "ok",
       "pending items and status reported")
 check(devices["TEL-02"]["last_position_at"] is not None and devices["TEL-02"]["battery_pct"] == 42,
