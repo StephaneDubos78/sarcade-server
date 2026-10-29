@@ -195,7 +195,7 @@ async def nearest_road(lat: float, lon: float, client: httpx.AsyncClient | None 
     own = client is None
     client = client or httpx.AsyncClient(timeout=REVERSE_TIMEOUT)
     try:
-        r = await client.get(url, params={"lat": lat, "lon": lon, "index": "address", "type": "street",
+        r = await client.get(url, params={"lat": lat, "lon": lon, "index": "address",
                                           "limit": 1}, headers={"User-Agent": "SARCADE"})
         r.raise_for_status()
         road = to_road(r.json(), lat, lon)
