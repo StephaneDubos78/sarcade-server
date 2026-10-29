@@ -1,0 +1,40 @@
+name: DCO
+
+# Developer Certificate of Origin: every commit of a pull request must carry
+# a "Signed-off-by:" line with the same e-mail address as the commit author.
+# Merge commits and the Dependabot / GitHub Actions bots are exempt.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    name: DCO (Signed-off-by)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check Signed-off-by on every commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          bots="49699333+dependabot[bot]@users.noreply.github.com 41898282+github-actions[bot]@users.noreply.github.com"
+          fail=0
+          for sha in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            email=$(git log -1 --format='%ae' "$sha")
+            subject=$(git log -1 --format='%s' "$sha")
+            case " $bots " in *" $email "*) echo "skip (bot)  ${sha:0:7} $subject"; continue ;; esac
+            if git log -1 --format='%B' "$sha" | grep -i '^Signed-off-by:' | grep -qiF "<$email>"; then
+              echo "ok          ${sha:0:7} $subject"
+            else
+              echo "::error::Commit ${sha:0:7} ($email) has no 'Signed-off-by:' line with the author's e-mail. Fix: git rebase --signoff origin/main && git push --force-with-lease (see CONTRIBUTING.md)."
+              fail=1
+            fi
+          done
+          exit $fail
