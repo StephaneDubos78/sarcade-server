@@ -99,6 +99,9 @@ def validate_upsert(payload: dict, *, event_id: str, object_id: str) -> dict:
         raise InvalidFeature("invalid_updated_by")
     created_by = payload.get("created_by") if isinstance(payload.get("created_by"), str) else updated_by
     extra = {"bearing": validate_bearing(payload.get("bearing"))} if kind == "bearing" else {}
+    # Géorepérage (ATAK 5): the PCO is warned when a team enters or leaves.
+    if payload.get("geofence") is True and kind in ("zone", "rectangle", "circle"):
+        extra["geofence"] = True
     return {
         **extra,
         "id": object_id,

@@ -150,8 +150,25 @@ async def ingest_position(payload: PositionCreate, db: Session = Depends(get_db)
     aprs_service.queue_transmission(db.get(EventRow, payload.event_id).settings, device,
                                     payload.lat, payload.lon, datetime.now(UTC))
     data = position_dict(row)
+    alerts = _geofence(db, payload.event_id, {"device_id": payload.device_id, "lat": payload.lat, "lon": payload.lon},
+                       datetime.now(UTC))
+    db.commit()
     await manager.broadcast(payload.event_id, {"type": "position.updated", "data": data})
+    for alert in alerts:
+        await manager.broadcast(payload.event_id, alert)
+        task = asyncio.create_task(wakeup_service.wake_for_message(payload.event_id, alert.get("data") or {}))
+        _wake_tasks.add(task)
+        task.add_done_callback(_wake_tasks.discard)
     return {"status": "accepted", "id": payload.id}
+
+
+def _geofence(db: Session, event_id: str, p: dict, now: datetime) -> list[dict]:
+    """Géorepérage alerts of a new position; never blocks the position."""
+    try:
+        return routes_api.geofence_alerts(db, event_id, str(p["device_id"]), float(p["lat"]), float(p["lon"]), now)
+    except Exception:  # noqa: BLE001
+        log.exception("geofence check failed")
+        return []
 
 
 @app.get("/api/v0.1/events/{event_id}/positions/latest", response_model=list[PositionOut])
@@ -637,6 +654,8 @@ async def synchronize(operations: list[dict], request: Request, db: Session = De
             continue
         if message:
             broadcasts.append((op.event_id, message))
+            if message.get("type") == "position.updated":
+                broadcasts.extend((op.event_id, x) for x in _geofence(db, op.event_id, op.payload, now))
         if identity is not None and status == "accepted":
             actor = access_logbook.actor_of(op.object_type, op.payload)
             if actor and (op.event_id, actor) not in seen_actors:
