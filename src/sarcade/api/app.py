@@ -49,6 +49,7 @@ from . import geocode as geocode_api
 from . import wakeup as wakeup_api
 from . import profile as profile_api
 from . import roles as roles_api
+from . import tv as tv_api
 from sarcade.wakeup import service as wakeup_service
 
 log = logging.getLogger("sarcade.sync")
@@ -84,6 +85,16 @@ async def no_store_for_api(request, call_next):
         response.headers["Cache-Control"] = "no-store"
     return response
 
+@app.middleware("http")
+async def tv_host_only_display(request, call_next):
+    """tv.* (Smart TV, no Cloudflare Access): only the display page and its
+    pairing and reading API answer; everything else is « not found »."""
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host.startswith("tv.") and not tv_api.tv_host_allows(request.url.path):
+        return JSONResponse({"detail": "not_found"}, status_code=404)
+    return await call_next(request)
+
+
 app.include_router(event_ops.router)
 app.include_router(groups_api.router)
 app.include_router(aprs_api.router)
@@ -100,6 +111,7 @@ app.include_router(geocode_api.router)
 app.include_router(wakeup_api.router)
 app.include_router(profile_api.router)
 app.include_router(roles_api.router)
+app.include_router(tv_api.router)
 
 
 @app.get("/health")
