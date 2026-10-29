@@ -28,6 +28,12 @@ DEFAULT_SETTINGS: dict = {
     "aprs_groups": [],
     "aprs_callsigns": [],
     "aprs_tx_rf": False,
+    # Callsign of the local radio transmission, chosen by the PCO of the
+    # event (decision of 28 Oct 2026: the ADRASEC has no callsign).
+    "aprs_tx_callsign": None,
+    # Stations without news for longer are « Anciens »: folded in the list,
+    # hidden on the map (decision of 28 Oct 2026, 2 h by default).
+    "position_old_min": 120,
     # Weather (note « Prévisions météo »): forecast point of the event and
     # department for the Météo-France vigilance.
     "weather_lat": None,
@@ -43,6 +49,7 @@ _COORD_KEYS = {"weather_lat": 90, "weather_lon": 180}
 _INT_RANGES = {
     "low_bandwidth_interval_s": (15, 3600),
     "sync_alert_minutes": (1, 120),
+    "position_old_min": (15, 1440),
 }
 _INTERVAL_KEYS = {"tracking_default_interval_s", "tracking_min_interval_s", "tracking_max_interval_s"}
 
@@ -79,6 +86,13 @@ def apply_patch(stored: dict | None, patch: dict) -> dict:
         elif key == "basemap":
             if not (isinstance(value, str) and 1 <= len(value) <= 40):
                 raise InvalidSettings("invalid_value:basemap")
+        elif key == "aprs_tx_callsign":
+            if value is not None:
+                from sarcade.aprs.callsigns import InvalidCallsign, normalize
+                try:
+                    value = normalize(value)
+                except (InvalidCallsign, TypeError) as exc:
+                    raise InvalidSettings("invalid_value:aprs_tx_callsign") from exc
         elif key == "department":
             if value is not None and not (isinstance(value, str) and 2 <= len(value.strip()) <= 3
                                           and value.strip().isalnum()):
@@ -148,6 +162,11 @@ def logbook_summaries(old: dict | None, new: dict) -> list[str]:
     if before["aprs_tx_rf"] != after["aprs_tx_rf"]:
         lines.append("APRS : émission radio locale des positions activée par le PCO" if after["aprs_tx_rf"]
                      else "APRS : émission radio locale des positions arrêtée")
+    if before["aprs_tx_callsign"] != after["aprs_tx_callsign"]:
+        lines.append(f"APRS : émission radio locale sous l'indicatif {after['aprs_tx_callsign']}"
+                     if after["aprs_tx_callsign"] else "APRS : indicatif d'émission radio locale retiré")
+    if before["position_old_min"] != after["position_old_min"]:
+        lines.append(f"Stations « anciennes » après {_duration(after['position_old_min'] * 60)} sans nouvelles")
     if (before["weather_lat"], before["weather_lon"]) != (after["weather_lat"], after["weather_lon"]):
         if after["weather_lat"] is not None and after["weather_lon"] is not None:
             lines.append(f"Météo : point de prévision {after['weather_lat']:.4f}, {after['weather_lon']:.4f}")

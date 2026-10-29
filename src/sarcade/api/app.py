@@ -48,6 +48,7 @@ from sarcade.access.verify import AccessMiddleware, identity_of
 from . import geocode as geocode_api
 from . import wakeup as wakeup_api
 from . import profile as profile_api
+from . import roles as roles_api
 from sarcade.wakeup import service as wakeup_service
 
 log = logging.getLogger("sarcade.sync")
@@ -98,6 +99,7 @@ app.add_middleware(AccessMiddleware)
 app.include_router(geocode_api.router)
 app.include_router(wakeup_api.router)
 app.include_router(profile_api.router)
+app.include_router(roles_api.router)
 
 
 @app.get("/health")
@@ -106,7 +108,7 @@ def health():
 
 
 @app.post("/api/v0.1/events", response_model=EventOut, status_code=201)
-def create_event(payload: EventCreate, db: Session = Depends(get_db)):
+def create_event(payload: EventCreate, db: Session = Depends(get_db), _pco=Depends(roles_api.require_pco)):
     now = datetime.now(UTC)
     row = EventRow(id=str(uuid.uuid4()), name=payload.name, kind=payload.kind, summary=payload.summary,
                    status="draft", created_at=now, version=0)

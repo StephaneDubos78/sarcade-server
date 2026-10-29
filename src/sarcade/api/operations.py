@@ -19,6 +19,7 @@ from sarcade.events import settings as event_settings
 from sarcade.realtime.manager import manager
 
 from .deps import get_db
+from .roles import require_pco
 
 router = APIRouter(prefix="/api/v0.1")
 
@@ -128,7 +129,8 @@ def get_event(event_id: str, db: Session = Depends(get_db)):
 
 
 @router.patch("/events/{event_id}/settings")
-async def update_settings(event_id: str, payload: SettingsPatch, db: Session = Depends(get_db)):
+async def update_settings(event_id: str, payload: SettingsPatch, db: Session = Depends(get_db),
+                          _pco: str | None = Depends(require_pco)):
     row = _event_or_404(db, event_id)
     if row.ended_at is not None:
         raise HTTPException(status_code=409, detail="event_closed")
@@ -149,7 +151,8 @@ async def update_settings(event_id: str, payload: SettingsPatch, db: Session = D
 
 
 @router.post("/events/{event_id}/close")
-async def close_event(event_id: str, payload: CloseEvent, db: Session = Depends(get_db)):
+async def close_event(event_id: str, payload: CloseEvent, db: Session = Depends(get_db),
+                      _pco: str | None = Depends(require_pco)):
     """End of event: clients stop position tracking automatically."""
     row = _event_or_404(db, event_id)
     if row.ended_at is None:
