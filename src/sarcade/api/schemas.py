@@ -54,12 +54,16 @@ class POICreate(BaseModel):
     label: str | None = Field(default=None, max_length=160)
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
+    created_by: str | None = Field(default=None, max_length=64)
+    color: int | None = Field(default=None, ge=0, le=0xFFFFFFFF)
 
 
 class POIOut(POICreate):
     event_id: str
     created_at: datetime
     version: int
+    updated_by: str | None = None
+    updated_at: datetime | None = None
 
 
 class SyncOperationIn(BaseModel):

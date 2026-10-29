@@ -77,6 +77,12 @@ class POIRow(Base):
     point = mapped_column(Geography(geometry_type="POINT", srid=4326), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Author, his drawing colour (ARGB) and the last change (29 Oct 2026).
+    created_by: Mapped[str | None] = mapped_column(String(64))
+    color: Mapped[int | None] = mapped_column(BigInteger)
+    updated_by: Mapped[str | None] = mapped_column(String(64))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 
