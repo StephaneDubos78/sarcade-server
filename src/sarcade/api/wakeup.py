@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/v0.1")
 
 
 class WakeTokenIn(BaseModel):
-    platform: str = Field(pattern="^(fcm|webpush|apns)$")
+    platform: str = Field(pattern="^(fcm|fcm_ios|webpush|apns)$")
     token: str = Field(min_length=1, max_length=4096)
 
 

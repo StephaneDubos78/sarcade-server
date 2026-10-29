@@ -20,7 +20,7 @@ from . import fcm, webpush
 
 log = logging.getLogger("sarcade.wakeup")
 
-PLATFORMS = ("fcm", "webpush", "apns")
+PLATFORMS = ("fcm", "fcm_ios", "webpush", "apns")
 ROUTINE_SPACING_S = 60
 TOKEN_MAX_AGE = timedelta(days=30)
 GROUP_PREFIX = "group:"
@@ -132,12 +132,12 @@ async def _send_one(client: httpx.AsyncClient, row: WakeTokenRow, data: dict[str
             if r.status_code in (404, 410):
                 return "gone"
             return "sent" if r.status_code < 300 else "failed"
-        if row.platform == "fcm":
+        if row.platform in ("fcm", "fcm_ios"):
             if account is None:
                 return "failed"
             access = await _fcm_token.get(client, account)
             r = await client.post(f"https://fcm.googleapis.com/v1/projects/{account['project_id']}/messages:send",
-                                  json=fcm.message(row.token, data, urgent), timeout=15,
+                                  json=fcm.message(row.token, data, urgent, ios=row.platform == "fcm_ios"), timeout=15,
                                   headers={"Authorization": f"Bearer {access}"})
             if fcm.is_gone(r.status_code, r.text):
                 return "gone"

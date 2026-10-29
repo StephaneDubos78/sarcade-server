@@ -80,3 +80,13 @@ def test_fcm_data_message_and_gone_tokens(monkeypatch, tmp_path):
     f.write_text(json.dumps({"client_email": "a@b", "private_key": "k", "project_id": "p"}))
     monkeypatch.setenv("SARCADE_FCM_SERVICE_ACCOUNT", str(f))
     assert fcm.load_account()["project_id"] == "p"
+
+
+def test_iphone_gets_a_generic_alert_without_content():
+    msg = fcm.message("tok", {"type": "wake", "priority": "immediate", "event_id": "e"}, True, ios=True)["message"]
+    aps = msg["apns"]["payload"]["aps"]
+    assert aps["alert"] == {"title": "SARCADE : message prioritaire", "body": "Ouvrez SARCADE pour le lire."}
+    assert msg["apns"]["headers"]["apns-priority"] == "10"
+    assert "apns" not in fcm.message("tok", {"type": "wake"}, True)["message"]
+    assert fcm.title({"kind": "test"}) == "SARCADE : réveil reçu"
+

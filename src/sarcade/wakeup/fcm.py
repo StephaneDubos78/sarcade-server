@@ -50,11 +50,29 @@ class AccessToken:
         return self.value
 
 
-def message(token: str, data: dict[str, str], high: bool) -> dict:
-    """Data message only (no notification block): the application decides
-    what to show after its synchronisation."""
-    return {"message": {"token": token, "data": data,
-                        "android": {"priority": "high" if high else "normal", "ttl": "3600s"}}}
+def title(data: dict[str, str]) -> str:
+    if data.get("kind") == "test":
+        return "SARCADE : réveil reçu"
+    if data.get("priority") in ("immediate", "urgent"):
+        return "SARCADE : message prioritaire"
+    return "SARCADE : nouveau message"
+
+
+def message(token: str, data: dict[str, str], high: bool, ios: bool = False) -> dict:
+    """Android: data message only, the application decides what to show
+    after its synchronisation. iPhone: iOS does not wake a closed
+    application for a data message, so a generic notification is shown by
+    the system (no content of the message, as on Android)."""
+    msg = {"token": token, "data": data,
+           "android": {"priority": "high" if high else "normal", "ttl": "3600s"}}
+    if ios:
+        msg["apns"] = {
+            "headers": {"apns-priority": "10" if high else "5", "apns-push-type": "alert"},
+            "payload": {"aps": {"alert": {"title": title(data), "body": "Ouvrez SARCADE pour le lire."},
+                                "sound": "default", "content-available": 1,
+                                **({"interruption-level": "time-sensitive"} if high else {})}},
+        }
+    return {"message": msg}
 
 
 def is_gone(status: int, body: str) -> bool:
