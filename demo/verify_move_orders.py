@@ -20,7 +20,7 @@ T0 = datetime.now(timezone.utc).replace(microsecond=0)
 
 def check(cond, msg):
     if not cond:
-        print(f"FAIL: {msg}")
+        print(f"::error::FAIL: {msg}")
         sys.exit(1)
     print(f"ok   {msg}")
 
