@@ -135,7 +135,9 @@ def state(request: Request, db: Session = Depends(get_db)):
                       .where(LogbookRow.kind.not_in(tuple(tv.TV_HIDDEN_LOG_KINDS)))
                       .order_by(LogbookRow.seq.desc()).limit(12)).all()
     logbook = [{"time": r.time, "actor_id": r.actor_id, "kind": r.kind, "summary": r.summary} for r in reversed(logs)]
-    return tv.snapshot({"id": event.id, "name": event.name}, positions, messages, logbook)
+    snap = tv.snapshot({"id": event.id, "name": event.name}, positions, messages, logbook)
+    snap["view"] = d.get("view")
+    return snap
 
 
 @router.get("/api/v0.1/events/{event_id}/displays")
@@ -158,6 +160,31 @@ def revoke_display(event_id: str, display_id: str, request: Request, db: Session
                               summary=f"Écran d'affichage révoqué (code {d.get('code')})", time=datetime.now(UTC)))
             db.commit()
             return
+    raise HTTPException(status_code=404, detail="display_not_found")
+
+
+class ViewIn(BaseModel):
+    """View of a phone copied onto a TV (« Envoyer ma vue », 29 Oct 2026);
+    ``view`` null gives the TV back its automatic framing."""
+    view: dict | None = None
+
+
+@router.put("/api/v0.1/events/{event_id}/displays/{display_id}/view")
+def send_view(event_id: str, display_id: str, body: ViewIn, request: Request, db: Session = Depends(get_db)):
+    try:
+        view = tv.clean_view(body.view)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    displays = _displays(db)
+    for d in displays:
+        if d["id"] == display_id and d.get("event_id") == event_id and not d.get("revoked"):
+            d["view"] = view
+            set_value(db, KEY, displays)
+            text = "Vue envoyée sur l'écran" if view else "Cadrage automatique rendu à l'écran"
+            db.add(LogbookRow(event_id=event_id, kind="display", object_id=None, actor_id=_actor(request),
+                              summary=f"{text} (code {d.get('code')})", time=datetime.now(UTC)))
+            db.commit()
+            return {"view": view}
     raise HTTPException(status_code=404, detail="display_not_found")
 
 
@@ -256,6 +283,13 @@ const p=await r.json();$('code').textContent=p.code;$('qr').innerHTML='';new QRC
 const until=Date.now()+p.expires_in*1000;const poll=async()=>{if(Date.now()>until){pair();return;}
 const s=await fetch('/api/v0.1/tv/pair/'+p.pair_id);if(s.ok){const j=await s.json();if(j.status==='approved'){token=j.token;localStorage.setItem('sarcade_tv_token',token);start();return;}}
 setTimeout(poll,3000);};poll();}
+// View sent by a phone (« Envoyer ma vue »): centre, zoom and base map, kept
+// until the next one; none: automatic framing on the stations.
+const OSM='https://tile.openstreetmap.org/{z}/{x}/{y}.png';let base=null,viewRev;
+function setBase(url,attr){const u=url||OSM;if(base&&base._url===u)return;if(base)map.removeLayer(base);
+base=L.tileLayer(u,{attribution:esc(url?(attr||''):'© OpenStreetMap'),maxZoom:19}).addTo(map);}
+function applyView(v){const rev=v?v.rev:null;if(rev===viewRev)return;viewRev=rev;
+if(v){map._fitted=true;map.setView([v.lat,v.lon],v.zoom);setBase(v.tile_url,v.attribution);}else{map._fitted=false;setBase(null);}}
 // Top bar: clock, and the state of the link with the server.
 let lastOk=0;
 function tick(){const d=new Date();$('clock').textContent=d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
@@ -270,12 +304,13 @@ $('nAprs').textContent=s.positions.filter(p=>p.source==='aprs').length;
 for(const p of s.positions){const ll=[p.lat,p.lon];pts.push(ll);const k=p.device_id;const aprs=p.source==='aprs';
 if(!markers[k]){markers[k]=L.circleMarker(ll,{radius:aprs?6:8,color:aprs?'#ffb020':'#3dd6f5',fillOpacity:.9}).bindTooltip(esc(label(p)),{permanent:true,direction:'right'}).addTo(map);markers[k]._aprs=aprs;}else markers[k].setLatLng(ll);}
 declutter();
+applyView(s.view);
 if(pts.length&&!map._fitted){map.fitBounds(pts,{padding:[40,40],maxZoom:15});map._fitted=true;}
 $('msgs').innerHTML=s.messages.slice(-8).reverse().map(m=>'<div class="m '+(m.priority==='immediate'?'i':m.priority==='urgent'?'u':'')+'">'+hm(m.created_at)+' · <b>'+esc(m.sender_id)+'</b> : '+esc(m.body)+'</div>').join('');
 $('log').innerHTML=s.logbook.slice(-8).reverse().map(l=>'<div class="m">'+hm(l.time)+' · '+esc(l.summary)+'</div>').join('');
 const recent=s.messages.filter(m=>m.priority==='immediate'&&Date.now()-new Date(m.created_at)<10*60000).pop();
 $('alert').style.display=recent?'block':'none';if(recent)$('alert').textContent=recent.sender_id+' : '+recent.body;}
 function start(){$('pair').style.display='none';$('app').style.display='grid';map=L.map('map',{zoomControl:false}).setView([46.6,2.4],6);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);map.on('zoomend moveend',declutter);tick();setInterval(tick,1000);refresh();setInterval(refresh,10000);}
+setBase(null);map.on('zoomend moveend',declutter);tick();setInterval(tick,1000);refresh();setInterval(refresh,10000);}
 if(token)start();else pair();
 </script></body></html>"""

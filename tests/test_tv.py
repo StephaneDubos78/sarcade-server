@@ -79,3 +79,18 @@ def test_tv_address_alone_opens_the_display():
     assert r.status_code == 200 and "SARCADE" in r.text and "sarcade_tv_token" in r.text
     assert c.get("/api/v0.1/events", headers={"host": "tv.sarcade.org"}).status_code == 404
 
+
+
+def test_view_sent_by_a_phone_is_checked():
+    v = tv.clean_view({"lat": 48.8, "lon": 2.1, "zoom": 14.333, "basemap": "ign",
+                       "tile_url": "https://data.geopf.fr/wmts/{z}/{x}/{y}", "attribution": "IGN"}, now=1)
+    assert v == {"lat": 48.8, "lon": 2.1, "zoom": 14.33, "basemap": "ign",
+                 "tile_url": "https://data.geopf.fr/wmts/{z}/{x}/{y}", "attribution": "IGN", "rev": 1000}
+    assert tv.clean_view(None) is None
+    import pytest
+    for bad in ({"lat": 99, "lon": 2, "zoom": 10}, {"lat": 1, "lon": 2, "zoom": 30},
+                {"lat": 1, "lon": 2, "zoom": 10, "tile_url": "http://x/{z}/{x}/{y}"},
+                {"lat": 1, "lon": 2, "zoom": 10, "tile_url": 'https://x/{z}/{x}/{y}"><script>'},
+                {"lat": 1, "lon": 2, "zoom": 10, "tile_url": "javascript:alert(1)"}):
+        with pytest.raises(ValueError):
+            tv.clean_view(bad)
