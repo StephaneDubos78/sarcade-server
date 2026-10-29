@@ -50,6 +50,7 @@ from . import wakeup as wakeup_api
 from . import profile as profile_api
 from . import personal_files as personal_files_api
 from . import roles as roles_api
+from sarcade import roles as user_roles
 from . import tv as tv_api
 from sarcade.wakeup import service as wakeup_service
 
@@ -539,12 +540,12 @@ class SyncRejected(Exception):
 
 
 def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
-                     notices: dict | None = None) -> tuple[str, int, dict | None]:
+                     notices: dict | None = None, pco: bool = False) -> tuple[str, int, dict | None]:
     """Applies one synchronised operation. Raises SyncRejected (or a data
     error) when it cannot be applied; the caller isolates it in a savepoint."""
     if op.object_type in routes_api.SYNC_TYPES:
         batch = (notices if notices is not None else {}).setdefault(op.event_id, routes_api.Notices())
-        return routes_api.apply_route_object(db, op, now, batch)
+        return routes_api.apply_route_object(db, op, now, batch, pco=pco)
     if op.object_type == "map_feature":
         return _apply_map_feature(db, op, now)
     if op.object_type == "comm_group":
@@ -648,6 +649,9 @@ async def synchronize(operations: list[dict], request: Request, db: Session = De
     identity = identity_of(request)
     seen_actors: set[tuple[str, str]] = set()
     notices: dict[str, routes_api.Notices] = {}
+    # PCO by the email checked by Cloudflare Access (move orders).
+    email = roles_api.checked_email(request)
+    pco = email is not None and "pco" in user_roles.roles_of(db, email)
     for raw in operations:
         operation_id = str(raw.get("operation_id") or "")[:64] if isinstance(raw, dict) else ""
         try:
@@ -664,7 +668,7 @@ async def synchronize(operations: list[dict], request: Request, db: Session = De
         now = datetime.now(UTC)
         try:
             with db.begin_nested():
-                status, cursor, message = _apply_operation(db, op, now, notices)
+                status, cursor, message = _apply_operation(db, op, now, notices, pco)
         except SyncRejected as exc:
             if exc.journal:
                 security_journal.record(db, **exc.journal)
