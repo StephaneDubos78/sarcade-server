@@ -46,6 +46,7 @@ from . import access as access_api
 from sarcade.access import logbook as access_logbook
 from sarcade.access.verify import AccessMiddleware, identity_of
 from . import geocode as geocode_api
+from . import places as places_api
 from . import wakeup as wakeup_api
 from . import profile as profile_api
 from . import personal_files as personal_files_api
@@ -117,6 +118,7 @@ app.include_router(access_api.router)
 # Server-side check of the Cloudflare Access token (off unless configured).
 app.add_middleware(AccessMiddleware)
 app.include_router(geocode_api.router)
+app.include_router(places_api.router)
 app.include_router(wakeup_api.router)
 app.include_router(profile_api.router)
 app.include_router(personal_files_api.router)
