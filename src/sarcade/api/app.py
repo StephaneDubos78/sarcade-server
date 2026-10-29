@@ -49,6 +49,8 @@ from . import geocode as geocode_api
 from . import wakeup as wakeup_api
 from . import profile as profile_api
 from . import personal_files as personal_files_api
+from . import file_folders as file_folders_api
+from sarcade.files import folders as file_folders
 from . import roles as roles_api
 from sarcade import roles as user_roles
 from . import tv as tv_api
@@ -115,6 +117,7 @@ app.include_router(geocode_api.router)
 app.include_router(wakeup_api.router)
 app.include_router(profile_api.router)
 app.include_router(personal_files_api.router)
+app.include_router(file_folders_api.router)
 app.include_router(roles_api.router)
 app.include_router(tv_api.router)
 
@@ -375,23 +378,27 @@ MAX_FILE_BYTES=int(os.getenv("SARCADE_MAX_FILE_BYTES",str(25*1024*1024)))
 def file_dict(r):
     return {"id":r.id,"event_id":r.event_id,"sender_id":r.sender_id,"name":r.name,
             "mime_type":r.mime_type,"size_bytes":r.size_bytes,"sha256":r.sha256,"created_at":r.created_at,
-            "folder":getattr(r,"folder",None) or "divers"}
-
-# Folders by use (« Écran Fichiers enrichi »); anything else goes to « divers ».
-FILE_FOLDERS=("consignes","cartes","photos","fiches","divers")
+            "folder":getattr(r,"folder",None) or ""}
 
 @app.get("/api/v0.1/events/{event_id}/files")
-def list_files(event_id:str,db:Session=Depends(get_db)):
+def list_files(event_id:str,with_folders:bool=Query(False),db:Session=Depends(get_db)):
+    """A list of files; with ``with_folders`` an object {files, folders}
+    (subfolders, sarcade.files.folders)."""
     rows=db.scalars(select(SharedFileRow).where(SharedFileRow.event_id==event_id).order_by(SharedFileRow.created_at)).all()
+    if with_folders:
+        return {"files":[file_dict(r) for r in rows],"folders":file_folders_api.listing(db,event_id,rows)}
     return [file_dict(r) for r in rows]
 
 @app.post("/api/v0.1/events/{event_id}/files",status_code=201)
-async def upload_file(event_id:str,sender_id:str=Form(...),file:UploadFile=File(...),
+async def upload_file(event_id:str,request:Request,sender_id:str=Form(...),file:UploadFile=File(...),
                       file_id:str|None=Form(None),mime_type:str|None=Form(None),folder:str|None=Form(None),
                       db:Session=Depends(get_db)):
     """[file_id], chosen by the client, makes the upload idempotent: an upload
-    retried after a network loss returns the stored file instead of a copy."""
+    retried after a network loss returns the stored file instead of a copy.
+    [folder] (form field or query parameter): subfolder, "" for the root."""
     if db.get(EventRow,event_id) is None: raise HTTPException(status_code=404,detail="unknown_event")
+    try: folder=file_folders.clean_path(folder if folder is not None else request.query_params.get("folder"))
+    except file_folders.FolderError as exc: raise HTTPException(status_code=exc.status,detail=exc.detail)
     if file_id is not None and not msg_attachments.valid_file_id(file_id):
         raise HTTPException(status_code=422,detail="invalid_file_id")
     data=await file.read(MAX_FILE_BYTES+1)
@@ -410,8 +417,8 @@ async def upload_file(event_id:str,sender_id:str=Form(...),file:UploadFile=File(
     with open(path,"wb") as out: out.write(data)
     row=SharedFileRow(id=fid,event_id=event_id,sender_id=sender_id,name=file.filename or "file",
         mime_type=msg_attachments.clean_mime_type(mime_type or file.content_type),size_bytes=len(data),storage_path=str(path),
-        sha256=digest,created_at=datetime.now(UTC),folder=folder if folder in FILE_FOLDERS else "divers")
-    db.add(row);db.commit();db.refresh(row)
+        sha256=digest,created_at=datetime.now(UTC),folder=folder)
+    db.add(row);file_folders.ensure(db,"event",event_id,folder);db.commit();db.refresh(row)
     db.add(LogbookRow(event_id=event_id,kind="file",object_id=row.id,actor_id=sender_id,
         summary=f"Fichier partagé : {row.name}",time=row.created_at));db.commit()
     await manager.broadcast(event_id,{"type":"file.created","data":file_dict(row)})

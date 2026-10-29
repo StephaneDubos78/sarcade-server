@@ -135,8 +135,9 @@ class SharedFileRow(Base):
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    # Folder by use (« Écran Fichiers enrichi », 28 Oct 2026).
-    folder: Mapped[str] = mapped_column(String(32), default="divers", nullable=False)
+    # Folder path, "" for the root, up to 3 segments joined by "/"
+    # (sarcade.files.folders).
+    folder: Mapped[str] = mapped_column(String(200), default="", nullable=False)
 
 
 class PersonalFileRow(Base):
@@ -151,6 +152,19 @@ class PersonalFileRow(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    folder: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+
+
+class FileFolderRow(Base):
+    """Folder of the Files screen, kept even when empty. ``scope`` « event »
+    (``owner`` = event id) or « personal » (``owner`` = checked email)."""
+    __tablename__ = "file_folders"
+    __table_args__ = (UniqueConstraint("scope", "owner", "path", name="uq_file_folder"),)
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    owner: Mapped[str] = mapped_column(String(320), nullable=False)
+    path: Mapped[str] = mapped_column(String(200), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
