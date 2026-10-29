@@ -174,7 +174,8 @@ def forecast(code=0, cloud=10, temp=12.4):
 
 def test_weather_of_the_current_hour():
     w = tv.weather_now(forecast(), None, NOW)
-    assert w == {"temp_c": 12.5, "icon": "sun", "vigilance": None}
+    assert w == {"temp_c": 12.5, "icon": "sun", "vigilance": None,
+                 "sunrise": "2026-10-29T06:30:00+00:00", "sunset": "2026-10-29T16:50:00+00:00"}
     night = NOW.replace(hour=21)
     assert tv.weather_now(forecast(), None, night)["icon"] == "moon"
     assert tv.weather_now(forecast(code=2), None, night)["icon"] == "moon_cloud"
@@ -187,6 +188,9 @@ def test_weather_of_the_current_hour():
     assert tv.weather_now(forecast(), {"color_id": 2}, NOW)["vigilance"] == "yellow"
     assert tv.weather_now(forecast(), {"color_id": 1}, NOW)["vigilance"] is None
     assert tv.weather_now(None, None, NOW) is None
+    no_sun = forecast()
+    no_sun["daily"] = []
+    assert "sunrise" not in tv.weather_now(no_sun, None, NOW)
     assert tv.weather_now(forecast(), None, NOW + timedelta(days=3)) is None   # outdated forecast
 
 
@@ -201,7 +205,8 @@ def test_snapshot_weather_from_the_weather_cache(monkeypatch):
     monkeypatch.setattr(tv, "weather_cache", tv.WeatherCache())
     monkeypatch.setattr(api, "datetime", SimpleNamespace(now=lambda tz=None: NOW))
     w = api._weather(None, "e1")
-    assert w == {"temp_c": 12.5, "icon": "rain", "vigilance": "orange"}
+    assert {k: w[k] for k in ("temp_c", "icon", "vigilance")} == {"temp_c": 12.5, "icon": "rain", "vigilance": "orange"}
+    assert w["sunrise"] and w["sunset"]                                   # sun times instead of the icon on the TV
     api._weather(None, "e1")
     assert calls == ["event:e1", "vigilance:e1"]                 # kept 10 minutes
     assert api._weather(None, "no-point") is None                # event without weather point

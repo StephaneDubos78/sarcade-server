@@ -297,7 +297,8 @@ _TV = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
 <title>SARCADE · affichage</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<style>html,body{margin:0;height:100%;background:#03152b;color:#eef3f9;font-family:system-ui,sans-serif}
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#03152b;color:#eef3f9;-webkit-text-size-adjust:100%;text-size-adjust:100%;
+font-family:Roboto,'Noto Sans','Helvetica Neue',Arial,Helvetica,sans-serif;letter-spacing:normal}
 #pair{display:grid;grid-template-columns:auto auto;justify-content:center;align-items:center;gap:8vw;height:100%;padding:0 8vw;box-sizing:border-box;
 background:radial-gradient(ellipse at 20% 30%,#0a3266 0%,#03152b 60%)}
 .left{display:flex;flex-direction:column;gap:3.2vh;min-width:0}
@@ -311,13 +312,14 @@ color:#ffb020;border-left:8px solid #ff4d1a;padding-left:3vw;line-height:1}
 @media (max-aspect-ratio:1/1){#pair{grid-template-columns:1fr;justify-items:center;text-align:center;padding:6vh 6vw;align-content:center}
 .left{align-items:center}#code{border-left:0;padding-left:0}}
 #app{display:none;height:100%;grid-template-columns:1fr minmax(300px,17%);grid-template-rows:68px 1fr}
-header{grid-column:1/3;display:flex;align-items:center;gap:22px;padding:0 20px;background:#03152b;border-bottom:1px solid #1e2c38}
+header{grid-column:1/3;display:flex;align-items:center;gap:22px;padding:0 20px;background:#03152b;border-bottom:1px solid #1e2c38;overflow:hidden;min-width:0}
 .hlogo{background:#fff;border-radius:10px;padding:4px 10px;display:flex}.hlogo img{height:50px;display:block}
 #title{font-size:26px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-.stats{display:flex;align-items:center;gap:26px;margin-left:auto;font-size:19px;color:#c4d1e0;white-space:nowrap}.stats b{color:#fff;font-size:22px}
+.stats{display:flex;align-items:center;gap:26px;margin-left:auto;font-size:19px;color:#c4d1e0;white-space:nowrap;min-width:0;overflow:hidden}.stats b{color:#fff;font-size:22px}
 .dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:#3ddc84;margin-right:7px}#link.lost{color:#ff6b6b}#link.lost .dot{background:#ff4d5e}
-#clock{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;margin-left:10px;color:#fff}#date{font-size:15px;color:#c4d1e0;text-align:right;line-height:1.1}
-#map{height:100%}aside{overflow:hidden;padding:12px 14px;border-left:1px solid #1e2c38;font-size:17px}
+#clock{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;margin-left:10px;color:#fff}
+#sun{font-size:17px;color:#c4d1e0;line-height:1.25;font-variant-numeric:tabular-nums}#sun b{color:#ffb020;font-weight:700}
+#map{height:100%;min-width:0}aside{overflow:hidden;padding:12px 14px;border-left:1px solid #1e2c38;font-size:17px;min-width:0;overflow-wrap:anywhere;word-wrap:break-word}
 h2{font-size:16px;color:#b9c6d2;text-transform:uppercase;letter-spacing:1px;margin:14px 0 6px}
 .m{padding:6px 0;border-bottom:1px solid #16212b}.u{color:#ffb020}.i{color:#ff4d5e;font-weight:700}
 #wx{display:flex;align-items:center;gap:6px;font-size:28px;font-weight:700;color:#fff;margin-left:4px;white-space:nowrap}
@@ -332,7 +334,7 @@ h2{font-size:16px;color:#b9c6d2;text-transform:uppercase;letter-spacing:1px;marg
 <div class="lead">Afficher SARCADE sur cet écran</div><div id="code">······</div>
 <div class="how">Dans l'application SARCADE : <b>Paramètres › Affichage › Écrans</b>, puis scannez le QR code ou saisissez ce code.</div>
 <div id="hint"></div></div><div id="qr"></div></div>
-<div id="app"><header><div class="hlogo"><img src="/tv/logo.png" alt="SARCADE"></div><div id="title"></div><div class="stats"><span><b id="nOps">0</b> opérateurs actifs</span><span><b id="nAprs">0</b> stations APRS</span><span id="link"><span class="dot"></span><span id="linkTxt">Connexion…</span></span></div><div id="wx"></div><div><div id="clock">--:--</div><div id="date"></div></div></header><div id="map"></div><aside><div id="msgBox"><h2>Messages</h2><div id="msgs"></div></div><h2>Main courante</h2><div id="log"></div></aside></div>
+<div id="app"><header><div class="hlogo"><img src="/tv/logo.png" alt="SARCADE"></div><div id="title"></div><div class="stats"><span><b id="nOps">0</b> opérateurs actifs</span><span><b id="nAprs">0</b> stations APRS</span><span id="link"><span class="dot"></span><span id="linkTxt">Connexion…</span></span></div><div id="wx"></div><div id="sun"></div><div id="clock">--:--</div></header><div id="map"></div><aside><div id="msgBox"><h2>Messages</h2><div id="msgs"></div></div><h2>Main courante</h2><div id="log"></div></aside></div>
 <div id="alert"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -373,8 +375,10 @@ storm:C2+'<path d="M12 14l-3 5h3l-1 4 4-6h-3l1-3z" fill="#ffb020"/>',
 snow:C2+'<circle cx="8" cy="20" r="1.4" fill="#fff"/><circle cx="12" cy="22" r="1.4" fill="#fff"/><circle cx="16" cy="20" r="1.4" fill="#fff"/>'};
 let wxAt=0;
 function weather(w){if(wxAt&&Date.now()-wxAt<600000)return;wxAt=Date.now();
-$('wx').innerHTML=w&&WX[w.icon]?'<svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true">'+WX[w.icon]+'</svg><span>'+Math.round(Number(w.temp_c))+'°</span>'
-+(w.vigilance==='orange'||w.vigilance==='red'?'<span class="vig '+w.vigilance+'"></span>':''):'';}
+// Temperature only, then sunrise and sunset in place of the weather icon (29 Oct 2026).
+$('wx').innerHTML=w&&w.temp_c!=null?'<span>'+Math.round(Number(w.temp_c))+'°</span>'
++(w.vigilance==='orange'||w.vigilance==='red'?'<span class="vig '+w.vigilance+'"></span>':''):'';
+$('sun').innerHTML=w&&w.sunrise&&w.sunset?'<b>↑</b> '+hm(w.sunrise)+'<br><b>↓</b> '+hm(w.sunset):'';}
 // Layers of the view: drawings, bearings, reference sites; sent again by
 // the server only when they changed (revisions fr / rr).
 let fr='',rr='',lastOp='',drawL,brgL,refL,dData=[],bData=[],rData=[];
@@ -411,10 +415,9 @@ for(const m of Object.values(markers)){m.setStyle({opacity:o.ops??1,fillOpacity:
 $('msgBox').style.display=s.options&&s.options.messages===false?'none':'';}
 // Top bar: clock, and the state of the link with the server.
 let lastOk=0;
-function tick(){const d=new Date();$('clock').textContent=d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
-$('date').textContent=d.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'});}
+function tick(){const d=new Date();$('clock').textContent=d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});}
 function linkState(ok){if(ok)lastOk=Date.now();const lost=!ok&&Date.now()-lastOk>30000;$('link').className=lost?'lost':'';
-$('linkTxt').textContent=lost?'Liaison perdue'+(lastOk?' depuis '+hm(lastOk):''):(lastOk?'En direct':'Connexion…');}
+$('linkTxt').textContent=lost?'Liaison perdue'+(lastOk?' depuis '+hm(lastOk):''):(lastOk?'Connecté':'Connexion…');}
 async function refresh(){let r;try{r=await fetch('/api/v0.1/tv/state?fr='+encodeURIComponent(fr)+'&rr='+encodeURIComponent(rr),{headers:{authorization:'Display '+token}});}catch(e){linkState(false);return;}
 if(r.status===401){localStorage.removeItem('sarcade_tv_token');location.reload();return;}if(!r.ok){linkState(false);return;}const s=await r.json();linkState(true);
 $('title').textContent=s.event.name;const pts=[];const now=Date.now();

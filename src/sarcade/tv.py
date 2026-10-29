@@ -326,8 +326,24 @@ def weather_now(forecast: dict | None, vigilance: dict | None, now: datetime) ->
     if isinstance(temp, bool) or not isinstance(temp, (int, float)):
         return None
     color = (vigilance or {}).get("color_id")
-    return {"temp_c": round(float(temp), 1), "icon": _icon(h.get("weather_code"), h.get("cloud_cover_pct"), is_night(forecast, now)),
-            "vigilance": VIGILANCE.get(color) if isinstance(color, int) else None}
+    out = {"temp_c": round(float(temp), 1), "icon": _icon(h.get("weather_code"), h.get("cloud_cover_pct"), is_night(forecast, now)),
+           "vigilance": VIGILANCE.get(color) if isinstance(color, int) else None}
+    out.update(sun_times(forecast, now))
+    return out
+
+
+def sun_times(forecast: dict, now: datetime) -> dict:
+    """Sunrise and sunset of the day, ISO in UTC (shown in local time by the
+    TV, 29 Oct 2026: they replace the weather icon); empty when unknown."""
+    days = []
+    for d in forecast.get("daily") or []:
+        rise, sset = _time(d.get("sunrise")), _time(d.get("sunset"))
+        if rise and sset:
+            days.append((rise, sset))
+    if not days:
+        return {}
+    rise, sset = min(days, key=lambda d: abs((d[0] - now).total_seconds()))
+    return {"sunrise": rise.isoformat(), "sunset": sset.isoformat()}
 
 
 @dataclass
