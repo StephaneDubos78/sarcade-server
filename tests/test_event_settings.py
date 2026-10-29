@@ -81,3 +81,10 @@ def test_pco_chooses_the_radio_callsign_and_the_old_threshold():
         s.apply_patch(None, {"aprs_tx_callsign": "pas valide !"})
     with pytest.raises(s.InvalidSettings):
         s.apply_patch(None, {"position_old_min": 5})
+
+
+def test_pco_sets_the_predefined_messages():
+    new = s.apply_patch(None, {"quick_messages": [" En place ", "Signal entendu", "En place"]})
+    assert new["quick_messages"] == ["En place", "Signal entendu"]
+    with pytest.raises(s.InvalidSettings):
+        s.apply_patch(None, {"quick_messages": ["x" * 121]})
