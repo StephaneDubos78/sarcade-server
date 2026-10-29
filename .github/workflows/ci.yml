@@ -63,6 +63,9 @@ jobs:
       - name: Verify photos in messages
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_message_photos.py"
+      - name: Verify deletions in messages
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_message_deletion.py"
       - name: Verify event operations (PCO settings, devices, end of event)
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_event_operations.py"
