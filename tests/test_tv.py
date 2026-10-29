@@ -32,7 +32,7 @@ def test_token_valid_until_revoked_or_expired():
 def test_tv_shows_general_messages_only():
     s = tv.snapshot({"id": "e", "name": "Exercice"}, [], [
         {"recipient_ids": [], "body": "à tous"}, {"recipient_ids": ["user:PCO"], "body": "privé"},
-        {"recipient_ids": ["group:x"], "body": "canal"}], [])
+        {"recipient_ids": ["group:x"], "body": "canal"}])
     assert [m["body"] for m in s["messages"]] == ["à tous"]
 
 
@@ -47,12 +47,11 @@ def test_tv_address_exposes_the_display_only():
     assert not api.tv_host_allows("/")
 
 
-def test_tv_logbook_hides_acks_and_messages():
-    s = tv.snapshot({"id": "e", "name": "Exercice"}, [], [], [
-        {"kind": "ack", "summary": "received: 5411"}, {"kind": "message", "summary": "message privé"},
-        {"kind": "display", "summary": "Écran d'affichage appairé"}, {"kind": "settings", "summary": "Seuil modifié"}])
-    assert [r["summary"] for r in s["logbook"]] == ["Écran d'affichage appairé", "Seuil modifié"]
-    assert all("kind" not in r for r in s["logbook"])
+def test_tv_no_longer_shows_the_logbook():
+    """Decision of 29 Oct 2026: right column = general messages only."""
+    s = tv.snapshot({"id": "e", "name": "Exercice"}, [], [])
+    assert "logbook" not in s
+    assert "Main courante" not in api._TV and "id=\"log\"" not in api._TV
 
 
 def test_any_operator_pairs_a_tv():
@@ -174,7 +173,8 @@ def forecast(code=0, cloud=10, temp=12.4):
 
 def test_weather_of_the_current_hour():
     w = tv.weather_now(forecast(), None, NOW)
-    assert w == {"temp_c": 12.5, "icon": "sun", "vigilance": None}
+    assert w == {"temp_c": 12.5, "icon": "sun", "vigilance": None,
+                 "sunrise": "2026-10-29T06:30:00+00:00", "sunset": "2026-10-29T16:50:00+00:00"}
     night = NOW.replace(hour=21)
     assert tv.weather_now(forecast(), None, night)["icon"] == "moon"
     assert tv.weather_now(forecast(code=2), None, night)["icon"] == "moon_cloud"
@@ -187,6 +187,9 @@ def test_weather_of_the_current_hour():
     assert tv.weather_now(forecast(), {"color_id": 2}, NOW)["vigilance"] == "yellow"
     assert tv.weather_now(forecast(), {"color_id": 1}, NOW)["vigilance"] is None
     assert tv.weather_now(None, None, NOW) is None
+    no_sun = forecast()
+    no_sun["daily"] = []
+    assert "sunrise" not in tv.weather_now(no_sun, None, NOW)
     assert tv.weather_now(forecast(), None, NOW + timedelta(days=3)) is None   # outdated forecast
 
 
@@ -201,7 +204,8 @@ def test_snapshot_weather_from_the_weather_cache(monkeypatch):
     monkeypatch.setattr(tv, "weather_cache", tv.WeatherCache())
     monkeypatch.setattr(api, "datetime", SimpleNamespace(now=lambda tz=None: NOW))
     w = api._weather(None, "e1")
-    assert w == {"temp_c": 12.5, "icon": "rain", "vigilance": "orange"}
+    assert {k: w[k] for k in ("temp_c", "icon", "vigilance")} == {"temp_c": 12.5, "icon": "rain", "vigilance": "orange"}
+    assert w["sunrise"] and w["sunset"]                                   # sun times instead of the icon on the TV
     api._weather(None, "e1")
     assert calls == ["event:e1", "vigilance:e1"]                 # kept 10 minutes
     assert api._weather(None, "no-point") is None                # event without weather point
@@ -219,3 +223,112 @@ def test_tv_page_draws_the_layers_with_escaped_texts():
     for needle in ("drawFeatures", "drawBearings", "drawRefs", "EXERCICE", "msgBox", 'id="wx"',
                    "esc(f.label)", "esc(name)", "esc(r.callsign||r.name)"):
         assert needle in api._TV
+
+
+# --- SOS banner of a screen (29 Oct 2026) -----------------------------------
+
+T_SOS = datetime(2026, 10, 29, 20, 0, tzinfo=UTC)
+
+
+def _m(who, body, minutes_ago, priority="immediate", to=()):
+    return {"sender_id": who, "body": body, "priority": priority, "recipient_ids": list(to),
+            "created_at": T_SOS - timedelta(minutes=minutes_ago)}
+
+
+SOS = "🆘 DÉTRESSE — TEL-01 — position 48.8, 2.1"
+
+
+def test_distress_shows_banner_and_pill():
+    st = tv.alert_state([_m("TEL-01", SOS, 2)], T_SOS)
+    assert st["alert"]["body"] == SOS and st["sos"] == ["TEL-01"]
+
+
+def test_end_of_distress_clears_banner_and_pill():
+    msgs = [_m("TEL-01", SOS, 3), _m("TEL-01", "Fin de détresse — TEL-01", 1, "urgent")]
+    assert tv.alert_state(msgs, T_SOS) == {"alert": None, "sos": []}
+    # The end of another sender closes nothing.
+    msgs = [_m("TEL-01", SOS, 3), _m("TEL-02", "Fin de détresse — TEL-02", 1, "urgent")]
+    assert tv.alert_state(msgs, T_SOS)["sos"] == ["TEL-01"]
+    # English app.
+    msgs = [_m("TEL-01", "🆘 DISTRESS — TEL-01 — position x", 3), _m("TEL-01", "End of distress — TEL-01", 1, "urgent")]
+    assert tv.alert_state(msgs, T_SOS)["sos"] == []
+
+
+def test_cleared_banner_keeps_the_pill_and_comes_back_on_a_new_message():
+    msgs = [_m("TEL-01", SOS, 3)]
+    cleared = (T_SOS - timedelta(minutes=1)).timestamp()
+    assert tv.alert_state(msgs, T_SOS, cleared) == {"alert": None, "sos": ["TEL-01"]}
+    msgs.append(_m("TEL-02", "Évacuez le secteur", 0))
+    assert tv.alert_state(msgs, T_SOS, cleared)["alert"]["body"] == "Évacuez le secteur"
+
+
+def test_banner_ignores_old_and_private_messages():
+    assert tv.alert_state([_m("A", "vieux", 11)], T_SOS)["alert"] is None
+    assert tv.alert_state([_m("A", SOS, 1, to=["user:PCO"])], T_SOS) == {"alert": None, "sos": []}
+
+
+@pytest.fixture
+def sos_client(monkeypatch):
+    from fastapi.testclient import TestClient
+    from sqlalchemy import BigInteger, create_engine
+    from sqlalchemy.ext.compiler import compiles
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from sarcade.api.app import app
+    from sarcade.api.deps import get_db
+    from sarcade.db.base import Base
+    from sarcade.db.models import EventRow, LogbookRow, MessageRow, ServerSettingRow
+    from sarcade.updates.service import set_value
+
+    @compiles(BigInteger, "sqlite")
+    def _bigint(type_, compiler, **kw):
+        return "INTEGER"
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine, tables=[t.__table__ for t in (EventRow, LogbookRow, MessageRow, ServerSettingRow)])
+    db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
+    db.add(EventRow(id="e1", name="Exercice", kind="exercise", status="active", created_at=T_SOS, version=0, settings={}))
+    db.add(MessageRow(id="m1", event_id="e1", sender_id="TEL-01", recipient_ids=[], priority="immediate",
+                      body=SOS, created_at=datetime.now(UTC)))
+    set_value(db, api.KEY, [{"id": "d1", "hash": "h", "event_id": "e1", "created": 0, "expires": 9e12,
+                             "revoked": False, "code": "ABCDEF", "owner": "op@x.fr"}])
+    db.commit()
+    who = {"email": None, "roles": []}
+    monkeypatch.setattr(api, "checked_email", lambda request: who["email"])
+    monkeypatch.setattr(api.roles, "roles_of", lambda db, email: who["roles"])
+    app.dependency_overrides[get_db] = lambda: db
+    yield TestClient(app), who, db
+    app.dependency_overrides.pop(get_db, None)
+
+
+def test_clear_alert_route_rights(sos_client):
+    c, who, db = sos_client
+    url = "/api/v0.1/events/e1/displays/d1/alert/clear"
+    [d] = c.get("/api/v0.1/events/e1/displays").json()
+    assert d["alert"] is True and d["owner"] == "op@x.fr"
+    who["email"] = "autre@x.fr"
+    assert c.get("/api/v0.1/events/e1/displays").json()[0]["can_clear_alert"] is False
+    assert c.post(url).status_code == 403
+    who["email"] = "op@x.fr"
+    assert c.post(url).status_code == 200
+    [d] = c.get("/api/v0.1/events/e1/displays").json()
+    assert d["alert"] is False
+    disp = api._displays(db)[0]
+    assert api._alert(db, "e1", disp) == {"alert": None, "sos": ["TEL-01"]}
+    who["email"], who["roles"] = "admin@x.fr", ["admin"]
+    assert c.post(url).status_code == 200
+    assert c.post("/api/v0.1/events/e1/displays/zz/alert/clear").status_code == 404
+
+
+def test_may_clear_owner_or_admin():
+    d = {"owner": "op@x.fr"}
+    assert api._may_clear(d, "op@x.fr", False)
+    assert not api._may_clear(d, "autre@x.fr", False)
+    assert api._may_clear(d, "autre@x.fr", True)
+    assert api._may_clear({"owner": None}, None, False)       # local network without Access
+    assert not api._may_clear({"owner": None}, "autre@x.fr", False)
+
+
+def test_approve_records_the_owner():
+    s = tv.Store()
+    p = s.new(now=1000)
+    assert s.approve(p.code, "evt", now=1001, approved_by="op@x.fr").approved_by == "op@x.fr"

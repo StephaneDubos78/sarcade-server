@@ -21,4 +21,14 @@ Type invalide : 422 (`invalid_layers`, `invalid_opacity`, `invalid_messages`…)
 - `drawings` (objets cartographiques hors relevés : `kind`, `points`, `radius_m`, `color`, `stroke_width`, `label`, `opacity`), `bearings` (`lat`, `lon`, `azimuth_deg`, `length_m`, `search`, `label`, `exercise`, `color` stable par recherche) et `references` (points hauts `HIGH_POINT`, relais `RELAY` : `name`, `callsign`, `lat`, `lon`) ;
 - `features_rev`, `references_rev` : la TV les renvoie en `fr` / `rr` ; tant qu'ils n'ont pas changé, `drawings`, `bearings` et `references` ne sont pas renvoyés.
 
+- `messages` : messages généraux seulement (la main courante n'est plus envoyée ni affichée, 29 octobre 2026) ;
+- `alert` : bandeau rouge (`sender_id`, `body`, `created_at`) = dernier message immédiat général des 10 dernières minutes, sauf s'il a été retiré sur cet écran ou si c'est une détresse (« 🆘 … ») close par un message « Fin de détresse — <même expéditeur> » (ou « End of distress ») ; `null` sinon ;
+- `sos` : expéditeurs dont la détresse n'est pas close (pastille « SOS » clignotante de l'en-tête, qui reste après retrait du bandeau).
+
+## Retirer le bandeau SOS d'un écran
+
+`POST /api/v0.1/events/{event_id}/displays/{display_id}/alert/clear` : les messages reçus jusque-là n'affichent plus le bandeau sur cet écran ; un nouveau message immédiat le rallume. Droits : la personne qui a appairé l'écran (e-mail vérifié par Cloudflare Access, champ `owner`) ou un administrateur (`admin`) ; sinon 403 `owner_or_admin_required`. Sans e-mail vérifié (réseau local sans Access) : permis. Ligne « Bandeau SOS retiré de l'écran » en main courante.
+
+`GET /api/v0.1/events/{event_id}/displays` donne en plus `owner`, `alert` (bandeau affiché) et `can_clear_alert` (pour l'appelant).
+
 Vérification : `tests/test_tv.py`, `demo/verify_map_features.py`.
