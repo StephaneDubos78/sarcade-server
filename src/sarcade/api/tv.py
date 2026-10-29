@@ -218,9 +218,14 @@ color:#ffb020;border-left:8px solid #ff4d1a;padding-left:3vw;line-height:1}
 #hint{font-size:18px;color:#ffb020;min-height:1em}
 @media (max-aspect-ratio:1/1){#pair{grid-template-columns:1fr;justify-items:center;text-align:center;padding:6vh 6vw;align-content:center}
 .left{align-items:center}#code{border-left:0;padding-left:0}}
-#app{display:none;height:100%;grid-template-columns:1fr 34%;grid-template-rows:56px 1fr}
-header{grid-column:1/3;display:flex;align-items:center;padding:0 20px;font-size:24px;font-weight:600;border-bottom:1px solid #1e2c38}
-#map{height:100%}aside{overflow:hidden;padding:12px 16px;border-left:1px solid #1e2c38;font-size:20px}
+#app{display:none;height:100%;grid-template-columns:1fr minmax(300px,17%);grid-template-rows:68px 1fr}
+header{grid-column:1/3;display:flex;align-items:center;gap:22px;padding:0 20px;background:#03152b;border-bottom:1px solid #1e2c38}
+.hlogo{background:#fff;border-radius:10px;padding:4px 10px;display:flex}.hlogo img{height:50px;display:block}
+#title{font-size:26px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.stats{display:flex;align-items:center;gap:26px;margin-left:auto;font-size:19px;color:#c4d1e0;white-space:nowrap}.stats b{color:#fff;font-size:22px}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:#3ddc84;margin-right:7px}#link.lost{color:#ff6b6b}#link.lost .dot{background:#ff4d5e}
+#clock{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;margin-left:10px;color:#fff}#date{font-size:15px;color:#c4d1e0;text-align:right;line-height:1.1}
+#map{height:100%}aside{overflow:hidden;padding:12px 14px;border-left:1px solid #1e2c38;font-size:17px}
 h2{font-size:16px;color:#b9c6d2;text-transform:uppercase;letter-spacing:1px;margin:14px 0 6px}
 .m{padding:6px 0;border-bottom:1px solid #16212b}.u{color:#ffb020}.i{color:#ff4d5e;font-weight:700}
 #alert{display:none;position:fixed;left:0;right:0;top:0;padding:18px;background:#ff4d5e;color:#fff;font-size:30px;font-weight:700;text-align:center;z-index:2000}
@@ -229,7 +234,7 @@ h2{font-size:16px;color:#b9c6d2;text-transform:uppercase;letter-spacing:1px;marg
 <div class="lead">Afficher SARCADE sur cet écran</div><div id="code">······</div>
 <div class="how">Dans l'application SARCADE : <b>Plus › Afficher sur une TV</b>, puis scannez le QR code ou saisissez ce code.</div>
 <div id="hint"></div></div><div id="qr"></div></div>
-<div id="app"><header id="title">SARCADE</header><div id="map"></div><aside><h2>Messages</h2><div id="msgs"></div><h2>Main courante</h2><div id="log"></div></aside></div>
+<div id="app"><header><div class="hlogo"><img src="/tv/logo.png" alt="SARCADE"></div><div id="title"></div><div class="stats"><span><b id="nOps">0</b> opérateurs actifs</span><span><b id="nAprs">0</b> stations APRS</span><span id="link"><span class="dot"></span><span id="linkTxt">Connexion…</span></span></div><div><div id="clock">--:--</div><div id="date"></div></div></header><div id="map"></div><aside><h2>Messages</h2><div id="msgs"></div><h2>Main courante</h2><div id="log"></div></aside></div>
 <div id="alert"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -251,9 +256,17 @@ const p=await r.json();$('code').textContent=p.code;$('qr').innerHTML='';new QRC
 const until=Date.now()+p.expires_in*1000;const poll=async()=>{if(Date.now()>until){pair();return;}
 const s=await fetch('/api/v0.1/tv/pair/'+p.pair_id);if(s.ok){const j=await s.json();if(j.status==='approved'){token=j.token;localStorage.setItem('sarcade_tv_token',token);start();return;}}
 setTimeout(poll,3000);};poll();}
-async function refresh(){const r=await fetch('/api/v0.1/tv/state',{headers:{authorization:'Display '+token}});
-if(r.status===401){localStorage.removeItem('sarcade_tv_token');location.reload();return;}if(!r.ok)return;const s=await r.json();
-$('title').textContent='SARCADE · '+s.event.name;const pts=[];
+// Top bar: clock, and the state of the link with the server.
+let lastOk=0;
+function tick(){const d=new Date();$('clock').textContent=d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+$('date').textContent=d.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'});}
+function linkState(ok){if(ok)lastOk=Date.now();const lost=!ok&&Date.now()-lastOk>30000;$('link').className=lost?'lost':'';
+$('linkTxt').textContent=lost?'Liaison perdue'+(lastOk?' depuis '+hm(lastOk):''):(lastOk?'À jour '+hm(lastOk):'Connexion…');}
+async function refresh(){let r;try{r=await fetch('/api/v0.1/tv/state',{headers:{authorization:'Display '+token}});}catch(e){linkState(false);return;}
+if(r.status===401){localStorage.removeItem('sarcade_tv_token');location.reload();return;}if(!r.ok){linkState(false);return;}const s=await r.json();linkState(true);
+$('title').textContent=s.event.name;const pts=[];const now=Date.now();
+$('nOps').textContent=s.positions.filter(p=>p.source!=='aprs'&&now-new Date(p.time)<10*60000).length;
+$('nAprs').textContent=s.positions.filter(p=>p.source==='aprs').length;
 for(const p of s.positions){const ll=[p.lat,p.lon];pts.push(ll);const k=p.device_id;const aprs=p.source==='aprs';
 if(!markers[k]){markers[k]=L.circleMarker(ll,{radius:aprs?6:8,color:aprs?'#ffb020':'#3dd6f5',fillOpacity:.9}).bindTooltip(esc(label(p)),{permanent:true,direction:'right'}).addTo(map);markers[k]._aprs=aprs;}else markers[k].setLatLng(ll);}
 declutter();
@@ -263,6 +276,6 @@ $('log').innerHTML=s.logbook.slice(-8).reverse().map(l=>'<div class="m">'+hm(l.t
 const recent=s.messages.filter(m=>m.priority==='immediate'&&Date.now()-new Date(m.created_at)<10*60000).pop();
 $('alert').style.display=recent?'block':'none';if(recent)$('alert').textContent=recent.sender_id+' : '+recent.body;}
 function start(){$('pair').style.display='none';$('app').style.display='grid';map=L.map('map',{zoomControl:false}).setView([46.6,2.4],6);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);map.on('zoomend moveend',declutter);refresh();setInterval(refresh,10000);}
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);map.on('zoomend moveend',declutter);tick();setInterval(tick,1000);refresh();setInterval(refresh,10000);}
 if(token)start();else pair();
 </script></body></html>"""
