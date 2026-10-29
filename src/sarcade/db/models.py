@@ -135,6 +135,23 @@ class SharedFileRow(Base):
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Folder by use (« Écran Fichiers enrichi », 28 Oct 2026).
+    folder: Mapped[str] = mapped_column(String(32), default="divers", nullable=False)
+
+
+class PersonalFileRow(Base):
+    """« Personnel » folder (decision of 28 Oct 2026): files of one person,
+    kept by the server, visible to that person only, tied to the email
+    checked by Cloudflare Access, found again on every device and event."""
+    __tablename__ = "personal_files"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(160), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ReferenceSiteRow(Base):

@@ -48,6 +48,7 @@ from sarcade.access.verify import AccessMiddleware, identity_of
 from . import geocode as geocode_api
 from . import wakeup as wakeup_api
 from . import profile as profile_api
+from . import personal_files as personal_files_api
 from sarcade.wakeup import service as wakeup_service
 
 log = logging.getLogger("sarcade.sync")
@@ -98,6 +99,7 @@ app.add_middleware(AccessMiddleware)
 app.include_router(geocode_api.router)
 app.include_router(wakeup_api.router)
 app.include_router(profile_api.router)
+app.include_router(personal_files_api.router)
 
 
 @app.get("/health")
@@ -338,7 +340,11 @@ MAX_FILE_BYTES=int(os.getenv("SARCADE_MAX_FILE_BYTES",str(25*1024*1024)))
 
 def file_dict(r):
     return {"id":r.id,"event_id":r.event_id,"sender_id":r.sender_id,"name":r.name,
-            "mime_type":r.mime_type,"size_bytes":r.size_bytes,"sha256":r.sha256,"created_at":r.created_at}
+            "mime_type":r.mime_type,"size_bytes":r.size_bytes,"sha256":r.sha256,"created_at":r.created_at,
+            "folder":getattr(r,"folder",None) or "divers"}
+
+# Folders by use (« Écran Fichiers enrichi »); anything else goes to « divers ».
+FILE_FOLDERS=("consignes","cartes","photos","fiches","divers")
 
 @app.get("/api/v0.1/events/{event_id}/files")
 def list_files(event_id:str,db:Session=Depends(get_db)):
@@ -347,7 +353,8 @@ def list_files(event_id:str,db:Session=Depends(get_db)):
 
 @app.post("/api/v0.1/events/{event_id}/files",status_code=201)
 async def upload_file(event_id:str,sender_id:str=Form(...),file:UploadFile=File(...),
-                      file_id:str|None=Form(None),mime_type:str|None=Form(None),db:Session=Depends(get_db)):
+                      file_id:str|None=Form(None),mime_type:str|None=Form(None),folder:str|None=Form(None),
+                      db:Session=Depends(get_db)):
     """[file_id], chosen by the client, makes the upload idempotent: an upload
     retried after a network loss returns the stored file instead of a copy."""
     if db.get(EventRow,event_id) is None: raise HTTPException(status_code=404,detail="unknown_event")
@@ -364,7 +371,7 @@ async def upload_file(event_id:str,sender_id:str=Form(...),file:UploadFile=File(
     path=directory/fid; path.write_bytes(data)
     row=SharedFileRow(id=fid,event_id=event_id,sender_id=sender_id,name=file.filename or "file",
         mime_type=msg_attachments.clean_mime_type(mime_type or file.content_type),size_bytes=len(data),storage_path=str(path),
-        sha256=digest,created_at=datetime.now(UTC))
+        sha256=digest,created_at=datetime.now(UTC),folder=folder if folder in FILE_FOLDERS else "divers")
     db.add(row);db.commit();db.refresh(row)
     db.add(LogbookRow(event_id=event_id,kind="file",object_id=row.id,actor_id=sender_id,
         summary=f"Fichier partagé : {row.name}",time=row.created_at));db.commit()
