@@ -44,3 +44,8 @@ def test_the_operator_only_answers():
     assert not r.move_order_allowed(before, "PCO", answer, "TEL-03", "update", pco=False)
     assert not r.move_order_allowed(before, "PCO", answer, "TEL-02", "delete", pco=False)
     assert r.move_order_allowed(before, "PCO", dict(before, status="cancelled"), "PCO", "update", pco=True)
+
+
+def test_move_orders_are_journaled_by_the_sync():
+    from sarcade.sync.service import VALID_TYPES
+    assert "move_order" in VALID_TYPES
