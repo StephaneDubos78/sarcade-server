@@ -7,6 +7,7 @@
 - API: pairing, approval and revocation by any operator (decision of the
   porteur, 29 Oct 2026: showing SARCADE on a TV is not a PCO right), state
   read by the TV, list of the screens of an event."""
+import hashlib
 import html
 import secrets
 import time
@@ -14,19 +15,21 @@ import uuid
 from pathlib import Path
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from sarcade import tv
-from sarcade.db.models import EventRow, LogbookRow, MessageRow, PositionRow
+from sarcade.db.models import EventRow, LogbookRow, MapFeatureRow, MessageRow, PositionRow, ReferenceSiteRow
+from sarcade.features import service as features
+from sarcade.weather import service as weather_service
 from sarcade.updates.service import get_value, set_value
 
 from .deps import get_db
 from .roles import checked_email
-from .serializers import position_dict
+from .serializers import position_dict, reference_site_dict
 
 router = APIRouter()
 KEY = "displays"
@@ -115,8 +118,64 @@ def _display(request: Request, db: Session) -> dict:
     return d
 
 
+def _weather(db: Session, event_id: str) -> dict | None:
+    """Weather of the current hour from the cache of the weather service
+    (no network call), computed at most every 10 minutes."""
+    def compute():
+        row = weather_service.cache_get(db, f"event:{event_id}")
+        if row is None:
+            return None
+        vig = weather_service.cache_get(db, f"vigilance:{event_id}")
+        return tv.weather_now(row.data, vig.data if vig else None, datetime.now(UTC))
+    return tv.weather_cache.get(event_id, compute)
+
+
+def _stamp(*parts) -> str:
+    return hashlib.sha1("|".join(str(p) for p in parts).encode()).hexdigest()[:16]
+
+
+def _map_layers(db: Session, event_id: str, opts: dict, fr: str | None, rr: str | None) -> dict:
+    """Drawings, bearings and reference sites, sent again only when they
+    changed since the revisions the TV already has (``fr``, ``rr``)."""
+    out: dict = {}
+    layers = opts["layers"]
+    count, last = db.execute(select(func.count(), func.max(MapFeatureRow.updated_at))
+                             .where(MapFeatureRow.event_id == event_id)).one()
+    out["features_rev"] = _stamp(count, last, layers["drawings"], layers["bearings"])
+    if out["features_rev"] != fr:
+        drawings, bearings = [], []
+        if layers["drawings"] or layers["bearings"]:
+            rows = db.scalars(select(MapFeatureRow).where(MapFeatureRow.event_id == event_id,
+                                                          MapFeatureRow.deleted_at.is_(None))
+                              .order_by(MapFeatureRow.created_at)).all()
+            for r in rows:
+                f = features.feature_dict(r)
+                if r.kind == "bearing":
+                    b = tv.tv_bearing(f)
+                    if b:
+                        bearings.append(b)
+                else:
+                    drawings.append(tv.tv_drawing(f))
+        out["drawings"], out["bearings"] = drawings, bearings
+    cats = [c for c, on in (("HIGH_POINT", layers["highpoints"]), ("RELAY", layers["relays"])) if on]
+    count, last = (db.execute(select(func.count(), func.max(ReferenceSiteRow.imported_at))
+                              .where(ReferenceSiteRow.status == "active", ReferenceSiteRow.category.in_(cats))).one()
+                   if cats else (0, None))
+    out["references_rev"] = _stamp(count, last, *cats)
+    if out["references_rev"] != rr:
+        rows = db.scalars(select(ReferenceSiteRow).where(ReferenceSiteRow.status == "active",
+                                                         ReferenceSiteRow.category.in_(cats))
+                          .limit(2000)).all() if cats else []
+        out["references"] = [{k: v for k, v in reference_site_dict(r).items()
+                              if k in ("id", "category", "name", "callsign", "lat", "lon")} for r in rows]
+    return out
+
+
 @router.get("/api/v0.1/tv/state")
-def state(request: Request, db: Session = Depends(get_db)):
+def state(request: Request, fr: str | None = Query(None, max_length=32), rr: str | None = Query(None, max_length=32),
+          db: Session = Depends(get_db)):
+    """``fr`` / ``rr``: revisions of the drawings and reference sites the TV
+    already has; unchanged layers are not sent again."""
     d = _display(request, db)
     event = db.get(EventRow, d["event_id"])
     if event is None:
@@ -136,7 +195,13 @@ def state(request: Request, db: Session = Depends(get_db)):
                       .order_by(LogbookRow.seq.desc()).limit(12)).all()
     logbook = [{"time": r.time, "actor_id": r.actor_id, "kind": r.kind, "summary": r.summary} for r in reversed(logs)]
     snap = tv.snapshot({"id": event.id, "name": event.name}, positions, messages, logbook)
-    snap["view"] = d.get("view")
+    view = d.get("view")
+    layers = _map_layers(db, event.id, tv.display_options(view), fr, rr)
+    snap = tv.apply_view(snap, view, datetime.now(UTC), weather=_weather(db, event.id),
+                         drawings=layers.get("drawings"), bearings=layers.get("bearings"),
+                         references=layers.get("references"))
+    snap["features_rev"], snap["references_rev"] = layers["features_rev"], layers["references_rev"]
+    snap["view"] = view
     return snap
 
 
@@ -255,13 +320,19 @@ header{grid-column:1/3;display:flex;align-items:center;gap:22px;padding:0 20px;b
 #map{height:100%}aside{overflow:hidden;padding:12px 14px;border-left:1px solid #1e2c38;font-size:17px}
 h2{font-size:16px;color:#b9c6d2;text-transform:uppercase;letter-spacing:1px;margin:14px 0 6px}
 .m{padding:6px 0;border-bottom:1px solid #16212b}.u{color:#ffb020}.i{color:#ff4d5e;font-weight:700}
+#wx{display:flex;align-items:center;gap:6px;font-size:28px;font-weight:700;color:#fff;margin-left:4px;white-space:nowrap}
+.vig{display:inline-block;width:12px;height:12px;border-radius:50%;margin-left:2px}.vig.orange{background:#ff8c1a}.vig.red{background:#ff4d5e}
+.ex{background:#ffb020;color:#03152b;font-weight:800;border-radius:4px;padding:0 5px;font-size:12px}
+.blab span{display:inline-block;white-space:nowrap;background:rgba(3,21,43,.85);color:#fff;border-left:4px solid;padding:2px 6px;font-size:14px;border-radius:4px}
+.txt span{white-space:nowrap;font-size:16px;font-weight:700;text-shadow:0 0 3px #000}
+.lowzoom .rlab{display:none}
 #alert{display:none;position:fixed;left:0;right:0;top:0;padding:18px;background:#ff4d5e;color:#fff;font-size:30px;font-weight:700;text-align:center;z-index:2000}
 </style></head><body>
 <div id="pair"><div class="left"><div class="logo"><img src="/tv/logo.png" alt="SARCADE"></div>
 <div class="lead">Afficher SARCADE sur cet écran</div><div id="code">······</div>
 <div class="how">Dans l'application SARCADE : <b>Paramètres › Affichage › Écrans</b>, puis scannez le QR code ou saisissez ce code.</div>
 <div id="hint"></div></div><div id="qr"></div></div>
-<div id="app"><header><div class="hlogo"><img src="/tv/logo.png" alt="SARCADE"></div><div id="title"></div><div class="stats"><span><b id="nOps">0</b> opérateurs actifs</span><span><b id="nAprs">0</b> stations APRS</span><span id="link"><span class="dot"></span><span id="linkTxt">Connexion…</span></span></div><div><div id="clock">--:--</div><div id="date"></div></div></header><div id="map"></div><aside><h2>Messages</h2><div id="msgs"></div><h2>Main courante</h2><div id="log"></div></aside></div>
+<div id="app"><header><div class="hlogo"><img src="/tv/logo.png" alt="SARCADE"></div><div id="title"></div><div class="stats"><span><b id="nOps">0</b> opérateurs actifs</span><span><b id="nAprs">0</b> stations APRS</span><span id="link"><span class="dot"></span><span id="linkTxt">Connexion…</span></span></div><div id="wx"></div><div><div id="clock">--:--</div><div id="date"></div></div></header><div id="map"></div><aside><div id="msgBox"><h2>Messages</h2><div id="msgs"></div></div><h2>Main courante</h2><div id="log"></div></aside></div>
 <div id="alert"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -290,19 +361,70 @@ function setBase(url,attr){const u=url||OSM;if(base&&base._url===u)return;if(bas
 base=L.tileLayer(u,{attribution:esc(url?(attr||''):'© OpenStreetMap'),maxZoom:19}).addTo(map);}
 function applyView(v){const rev=v?v.rev:null;if(rev===viewRev)return;viewRev=rev;
 if(v){map._fitted=true;map.setView([v.lat,v.lon],v.zoom);setBase(v.tile_url,v.attribution);}else{map._fitted=false;setBase(null);}}
+// Weather of the current hour (computed by the server at most every 10 min).
+const C1='<path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z" fill="#b9c6d2"/>';
+const C2='<path d="M7 15h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 6.5 4.3 4.3 0 0 0 7 15z" fill="#b9c6d2"/>';
+const SUN='<circle cx="12" cy="12" r="5" fill="#ffb020"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1" stroke="#ffb020" stroke-width="2" stroke-linecap="round"/>';
+const MOON='<path d="M15 3a9 9 0 1 0 6 15A7 7 0 0 1 15 3z" fill="#dfe7f1"/>';
+const WX={sun:SUN,moon:MOON,cloud:C1,fog:'<path d="M3 8h18M5 12h14M3 16h18M6 20h12" stroke="#b9c6d2" stroke-width="2" stroke-linecap="round"/>',
+sun_cloud:'<circle cx="8" cy="8" r="4.5" fill="#ffb020"/>'+C1,moon_cloud:'<path d="M9 2a6 6 0 1 0 5 9A5 5 0 0 1 9 2z" fill="#dfe7f1"/>'+C1,
+rain:C2+'<path d="M8 19l-1 3M12 19l-1 3M16 19l-1 3" stroke="#3dd6f5" stroke-width="2" stroke-linecap="round"/>',
+storm:C2+'<path d="M12 14l-3 5h3l-1 4 4-6h-3l1-3z" fill="#ffb020"/>',
+snow:C2+'<circle cx="8" cy="20" r="1.4" fill="#fff"/><circle cx="12" cy="22" r="1.4" fill="#fff"/><circle cx="16" cy="20" r="1.4" fill="#fff"/>'};
+let wxAt=0;
+function weather(w){if(wxAt&&Date.now()-wxAt<600000)return;wxAt=Date.now();
+$('wx').innerHTML=w&&WX[w.icon]?'<svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true">'+WX[w.icon]+'</svg><span>'+Math.round(Number(w.temp_c))+'°</span>'
++(w.vigilance==='orange'||w.vigilance==='red'?'<span class="vig '+w.vigilance+'"></span>':''):'';}
+// Layers of the view: drawings, bearings, reference sites; sent again by
+// the server only when they changed (revisions fr / rr).
+let fr='',rr='',lastOp='',drawL,brgL,refL,dData=[],bData=[],rData=[];
+function argb(c){c=Number(c)>>>0;return{col:'#'+(c&0xFFFFFF).toString(16).padStart(6,'0'),a:((c>>>24)&255)/255||1};}
+function arrowHead(pts){const a=pts[pts.length-2],b=pts[pts.length-1],k=Math.cos(b[0]*Math.PI/180)||1;
+const dx=(b[1]-a[1])*k,dy=b[0]-a[0],h=Math.hypot(dx,dy)*0.2,t=Math.atan2(dy,dx);
+const p=s=>[b[0]+h*Math.sin(t+s),b[1]+h*Math.cos(t+s)/k];return[p(2.6),b,p(-2.6)];}
+function drawFeatures(op){drawL.clearLayers();for(const f of dData){const c=argb(f.color),o=(f.opacity??1)*op*c.a,pts=f.points||[];
+if(!pts.length)continue;const st={color:c.col,weight:f.stroke_width||2,opacity:o,fillOpacity:o*0.25};let l;
+if(f.kind==='point')l=L.circleMarker(pts[0],{...st,radius:6,fillOpacity:o});
+else if(f.kind==='text')l=L.marker(pts[0],{interactive:false,icon:L.divIcon({className:'txt',iconSize:null,html:'<span style="color:'+c.col+';opacity:'+o+'">'+esc(f.label)+'</span>'})});
+else if(f.kind==='circle')l=L.circle(pts[0],{...st,radius:Number(f.radius_m)||1});
+else if(f.kind==='rectangle'&&pts.length>1)l=L.rectangle([pts[0],pts[1]],st);
+else if(f.kind==='zone')l=L.polygon(pts,st);
+else if(f.kind==='arrow'&&pts.length>1)l=L.featureGroup([L.polyline(pts,st),L.polyline(arrowHead(pts),st)]);
+else l=L.polyline(pts,st);
+if(f.label&&f.kind!=='text')l.bindTooltip(esc(f.label),{permanent:true,direction:'center'});l.addTo(drawL);}}
+function dest(lat,lon,az,m){const d=m/6371000,t=az*Math.PI/180,p1=lat*Math.PI/180,l1=lon*Math.PI/180;
+const p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(t));
+return[p2*180/Math.PI,(l1+Math.atan2(Math.sin(t)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2)))*180/Math.PI];}
+function drawBearings(op){brgL.clearLayers();for(const b of bData){const col=/^#[0-9a-f]{6}$/i.test(b.color)?b.color:'#ff4d5e';
+const st={color:col,weight:3,opacity:op},end=dest(b.lat,b.lon,b.azimuth_deg,b.length_m),name=b.search||b.label;
+L.circleMarker([b.lat,b.lon],{...st,radius:4,fillOpacity:op}).addTo(brgL);L.polyline([[b.lat,b.lon],end],st).addTo(brgL);
+if(name||b.exercise)L.marker(end,{interactive:false,icon:L.divIcon({className:'blab',iconSize:null,
+html:'<span style="border-color:'+col+';opacity:'+op+'">'+(b.exercise?'<span class="ex">EXERCICE</span> ':'')+esc(name)+'</span>'})}).addTo(brgL);}}
+function drawRefs(op){refL.clearLayers();for(const r of rData){const c=r.category==='HIGH_POINT'?'#7ddc5a':'#c77dff';
+L.circleMarker([r.lat,r.lon],{radius:5,color:c,weight:2,opacity:op,fillOpacity:op*0.6})
+.bindTooltip(esc(r.callsign||r.name),{permanent:true,direction:'right',className:'rlab'}).addTo(refL);}}
+function layers(s){const o=(s.options&&s.options.opacity)||{},key=JSON.stringify(o);
+if(s.drawings)dData=s.drawings;if(s.bearings)bData=s.bearings;if(s.references)rData=s.references;
+if(s.drawings||s.bearings||key!==lastOp){drawFeatures(o.draw??1);drawBearings(o.brg??1);}
+if(s.references||key!==lastOp)drawRefs(o.ref??1);lastOp=key;fr=s.features_rev||'';rr=s.references_rev||'';
+for(const m of Object.values(markers)){m.setStyle({opacity:o.ops??1,fillOpacity:.9*(o.ops??1)});m.bringToFront();}
+$('msgBox').style.display=s.options&&s.options.messages===false?'none':'';}
 // Top bar: clock, and the state of the link with the server.
 let lastOk=0;
 function tick(){const d=new Date();$('clock').textContent=d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
 $('date').textContent=d.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'});}
 function linkState(ok){if(ok)lastOk=Date.now();const lost=!ok&&Date.now()-lastOk>30000;$('link').className=lost?'lost':'';
 $('linkTxt').textContent=lost?'Liaison perdue'+(lastOk?' depuis '+hm(lastOk):''):(lastOk?'En direct':'Connexion…');}
-async function refresh(){let r;try{r=await fetch('/api/v0.1/tv/state',{headers:{authorization:'Display '+token}});}catch(e){linkState(false);return;}
+async function refresh(){let r;try{r=await fetch('/api/v0.1/tv/state?fr='+encodeURIComponent(fr)+'&rr='+encodeURIComponent(rr),{headers:{authorization:'Display '+token}});}catch(e){linkState(false);return;}
 if(r.status===401){localStorage.removeItem('sarcade_tv_token');location.reload();return;}if(!r.ok){linkState(false);return;}const s=await r.json();linkState(true);
 $('title').textContent=s.event.name;const pts=[];const now=Date.now();
 $('nOps').textContent=s.positions.filter(p=>p.source!=='aprs'&&now-new Date(p.time)<10*60000).length;
 $('nAprs').textContent=s.positions.filter(p=>p.source==='aprs').length;
 for(const p of s.positions){const ll=[p.lat,p.lon];pts.push(ll);const k=p.device_id;const aprs=p.source==='aprs';
 if(!markers[k]){markers[k]=L.circleMarker(ll,{radius:aprs?6:8,color:aprs?'#ffb020':'#3dd6f5',fillOpacity:.9}).bindTooltip(esc(label(p)),{permanent:true,direction:'right'}).addTo(map);markers[k]._aprs=aprs;}else markers[k].setLatLng(ll);}
+// Stations no longer shown (hidden layer) leave the map.
+const keep=new Set(s.positions.map(p=>p.device_id));for(const k of Object.keys(markers))if(!keep.has(k)){map.removeLayer(markers[k]);delete markers[k];}
+layers(s);weather(s.weather);
 declutter();
 applyView(s.view);
 if(pts.length&&!map._fitted){map.fitBounds(pts,{padding:[40,40],maxZoom:15});map._fitted=true;}
@@ -311,6 +433,7 @@ $('log').innerHTML=s.logbook.slice(-8).reverse().map(l=>'<div class="m">'+hm(l.t
 const recent=s.messages.filter(m=>m.priority==='immediate'&&Date.now()-new Date(m.created_at)<10*60000).pop();
 $('alert').style.display=recent?'block':'none';if(recent)$('alert').textContent=recent.sender_id+' : '+recent.body;}
 function start(){$('pair').style.display='none';$('app').style.display='grid';map=L.map('map',{zoomControl:false}).setView([46.6,2.4],6);
-setBase(null);map.on('zoomend moveend',declutter);tick();setInterval(tick,1000);refresh();setInterval(refresh,10000);}
+setBase(null);map.on('zoomend moveend',declutter);drawL=L.layerGroup().addTo(map);brgL=L.layerGroup().addTo(map);refL=L.layerGroup().addTo(map);
+map.on('zoomend',()=>map.getContainer().classList.toggle('lowzoom',map.getZoom()<12));map.getContainer().classList.add('lowzoom');tick();setInterval(tick,1000);refresh();setInterval(refresh,10000);}
 if(token)start();else pair();
 </script></body></html>"""

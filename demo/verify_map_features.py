@@ -130,4 +130,24 @@ check(b["bearing"]["azimuth_deg"] == 41 and b["bearing"]["cone_deg"] == 5 and b[
 log = [x["summary"] for x in c.get(f"{BASE}/api/v0.1/events/{event}/logbook").json() if x["object_id"] == bid]
 check(log == ["Objet cartographique créé : Relevé", "Objet cartographique modifié : Relevé"], "bearing changes in the logbook")
 
+# TV display: drawings and bearings by layer, revisions (« Envoyer ma vue », step 2).
+pair = c.post(f"{BASE}/api/v0.1/tv/pair").json()
+check(c.post(f"{BASE}/api/v0.1/tv/approve", json={"code": pair["code"], "event_id": event}).status_code == 200,
+      "TV paired for the event")
+tok = c.get(f"{BASE}/api/v0.1/tv/pair/{pair['pair_id']}").json()["token"]
+TVH = {"authorization": f"Display {tok}"}
+st = c.get(f"{BASE}/api/v0.1/tv/state", headers=TVH).json()
+check(len(st["bearings"]) == 1 and st["bearings"][0]["azimuth_deg"] == 41 and st["bearings"][0]["color"].startswith("#"),
+      "TV receives the bearings")
+check(isinstance(st["drawings"], list) and st["references"] == [] and "weather" in st, "TV layers by default")
+again = c.get(f"{BASE}/api/v0.1/tv/state", headers=TVH,
+              params={"fr": st["features_rev"], "rr": st["references_rev"]}).json()
+check("drawings" not in again and "bearings" not in again, "unchanged layers not sent again")
+disp = [d for d in c.get(f"{BASE}/api/v0.1/events/{event}/displays").json() if d["active"]][0]
+r = c.put(f"{BASE}/api/v0.1/events/{event}/displays/{disp['id']}/view",
+          json={"view": {"lat": 48.8, "lon": 2.1, "zoom": 12, "layers": {"bearings": False}, "opacity": {"draw": 0.5}}})
+check(r.status_code == 200 and r.json()["view"]["layers"]["bearings"] is False, "view with layers sent to the TV")
+st = c.get(f"{BASE}/api/v0.1/tv/state", headers=TVH, params={"fr": st["features_rev"]}).json()
+check(st["bearings"] == [] and st["options"]["opacity"]["draw"] == 0.5, "hidden layer not drawn by the TV")
+
 print("PASS: map feature synchronisation follows ADR-001")
