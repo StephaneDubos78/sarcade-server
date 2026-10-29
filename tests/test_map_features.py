@@ -93,3 +93,12 @@ def test_future_clock_is_clamped():
 def test_logbook_summary_is_french():
     assert f.logbook_summary("zone", "Secteur A", "create") == "Objet cartographique créé : Zone « Secteur A »"
     assert f.logbook_summary("circle", "", "delete") == "Objet cartographique supprimé : Cercle"
+
+
+def test_opacity_is_kept_below_100_percent_only():
+    assert "opacity" not in f.validate_upsert(payload(), event_id=EVENT, object_id=FID)
+    assert "opacity" not in f.validate_upsert(payload(opacity=1), event_id=EVENT, object_id=FID)
+    assert f.validate_upsert(payload(opacity=0.456), event_id=EVENT, object_id=FID)["opacity"] == 0.46
+    for bad in (0, 1.5, "x", True):
+        with pytest.raises(f.InvalidFeature):
+            f.validate_upsert(payload(opacity=bad), event_id=EVENT, object_id=FID)
