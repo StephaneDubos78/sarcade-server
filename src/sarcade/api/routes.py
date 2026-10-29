@@ -21,7 +21,7 @@ from .deps import get_db
 router = APIRouter(prefix="/api/v0.1")
 _META = ("id", "event_id", "updated_at", "updated_by", "created_by", "base_point_order")
 SYSTEM_SENDER = "SARCADE"
-SYNC_TYPES = ("route", "route_waypoint", "route_passage", "road_closure", "itinerary")
+SYNC_TYPES = ("route", "route_waypoint", "route_passage", "road_closure", "itinerary", "move_order")
 
 
 def object_dict(row: RouteObjectRow) -> dict:
@@ -39,6 +39,8 @@ class Notices:
     def __init__(self):
         self.changes: dict[str, list[str]] = {}
         self.order_conflicts: list[tuple[str, str, str]] = []
+        # Messages of the move orders: (sender, recipients, priority, body, order id).
+        self.messages: list[tuple[str, list[str], str, str, str]] = []
 
     def add(self, route_id: str, text: str) -> None:
         self.changes.setdefault(route_id, [])
@@ -53,7 +55,9 @@ def _route(db: Session, route_id: str | None) -> RouteObjectRow | None:
     return row if row is not None and row.kind == "route" else None
 
 
-def apply_route_object(db: Session, op, now: datetime, notices: Notices) -> tuple[str, int, dict | None]:
+def apply_route_object(db: Session, op, now: datetime, notices: Notices,
+                       pco: bool = False) -> tuple[str, int, dict | None]:
+    """``pco``: the caller is PCO by the email checked by Cloudflare Access."""
     kind = op.object_type
     if op.action not in ("create", "update", "delete"):
         return "rejected", 0, None
@@ -78,7 +82,11 @@ def apply_route_object(db: Session, op, now: datetime, notices: Notices) -> tupl
     if kind == "itinerary" and row is not None and actor not in (row.created_by, row.data.get("device_id")) \
             and not groups.is_pco(actor):
         return "rejected", 0, None
-    if kind in ("road_closure", "itinerary"):
+    if kind == "move_order" and not routes.move_order_allowed(
+            dict(row.data) if row is not None else None, row.created_by if row is not None else None,
+            change, actor, op.action, pco or groups.is_pco(actor)):
+        return "rejected", 0, None
+    if kind in ("road_closure", "itinerary", "move_order"):
         route_row = None
     elif kind == "route":
         if row is not None and not routes.can_edit(row.data, row.created_by, actor):
@@ -178,6 +186,30 @@ def _logbook_and_notices(db, event_id, kind, row, before, was_deleted, change, r
         elif was_active and not active:
             log(f"Route rouverte : « {label} »")
         return
+    if kind == "move_order" and row.deleted_at is None:
+        d = row.data
+        target = d.get("target_id")
+        label = (d.get("destination") or {}).get("label") or "point désigné"
+        status = d.get("status")
+        if before is None:
+            log(f"Ordre de déplacement : {target} vers « {label} »")
+            notices.messages.append((actor, [target], "immediate", routes.move_order_text(d), row.id))
+        elif status != before.get("status"):
+            if status == "accepted":
+                log(f"{target} a accepté l'ordre de déplacement vers « {label} »")
+            elif status == "refused":
+                log(f"{target} a refusé l'ordre de déplacement vers « {label} »")
+                notices.messages.append((target, [row.created_by], "urgent",
+                                         f"Ordre de déplacement refusé par {target} : « {label} »", row.id))
+            elif status == "arrived":
+                log(f"Arrivée de {target} à « {label} » (ordre de déplacement)")
+                notices.messages.append((target, [row.created_by], "routine",
+                                         f"{target} est arrivé à « {label} »", row.id))
+            elif status == "cancelled":
+                log(f"Ordre de déplacement de {target} vers « {label} » annulé")
+                notices.messages.append((actor, [target], "urgent",
+                                         f"Ordre de déplacement annulé : « {label} »", row.id))
+        return
     if kind == "itinerary" and row.deleted_at is None:
         d = row.data
         dest = d.get("destination", {}).get("label") or "point désigné"
@@ -222,6 +254,16 @@ def flush_notices(db: Session, event_id: str, notices: Notices, now: datetime) -
         payloads.append({"type": "message.created", "data": {
             "id": msg.id, "event_id": event_id, "sender_id": SYSTEM_SENDER, "recipient_ids": recipients,
             "priority": "urgent", "body": body, "attachments": [], "route_id": route_id,
+            "created_at": features.iso(now)}})
+    for sender, recipients, priority, body, order_id in notices.messages:
+        msg = MessageRow(id=str(uuid.uuid4()), event_id=event_id, sender_id=sender[:64],
+                         recipient_ids=recipients, priority=priority, body=body, attachments=None, created_at=now)
+        db.add(msg)
+        db.add(LogbookRow(event_id=event_id, kind="message", object_id=msg.id, actor_id=sender[:64],
+                          summary=body, time=now))
+        payloads.append({"type": "message.created", "data": {
+            "id": msg.id, "event_id": event_id, "sender_id": sender[:64], "recipient_ids": recipients,
+            "priority": priority, "body": body, "attachments": [], "move_order_id": order_id,
             "created_at": features.iso(now)}})
     for route_id, name, actor in notices.order_conflicts:
         text = f"Ordre des points de la route « {name} » modifié en même temps par plusieurs personnes : la dernière version ({actor}) l'emporte"
@@ -275,6 +317,15 @@ def list_itineraries(event_id: str, db: Session = Depends(get_db)):
     """Shared itineraries: planned path and estimated arrival for the PCO."""
     rows = db.scalars(select(RouteObjectRow).where(RouteObjectRow.event_id == event_id,
                                                    RouteObjectRow.kind == "itinerary",
+                                                   RouteObjectRow.deleted_at.is_(None))).all()
+    return [object_dict(r) for r in rows]
+
+
+@router.get("/events/{event_id}/move-orders")
+def list_move_orders(event_id: str, db: Session = Depends(get_db)):
+    """Move orders of the PCO to the operators, with their answers."""
+    rows = db.scalars(select(RouteObjectRow).where(RouteObjectRow.event_id == event_id,
+                                                   RouteObjectRow.kind == "move_order",
                                                    RouteObjectRow.deleted_at.is_(None))).all()
     return [object_dict(r) for r in rows]
 
