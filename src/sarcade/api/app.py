@@ -367,8 +367,13 @@ async def upload_file(event_id:str,sender_id:str=Form(...),file:UploadFile=File(
         if existing.event_id!=event_id or existing.sha256!=digest:
             raise HTTPException(status_code=409,detail="file_id_conflict")
         return JSONResponse(jsonable_encoder(file_dict(existing)),status_code=200)
-    fid=file_id or str(uuid.uuid4()); directory=FILE_ROOT/event_id; directory.mkdir(parents=True,exist_ok=True)
-    path=directory/fid; path.write_bytes(data)
+    fid=file_id or str(uuid.uuid4())
+    # Stored under FILE_ROOT only, whatever the identifiers given.
+    root=os.path.realpath(FILE_ROOT)
+    path=os.path.realpath(os.path.join(root,event_id,fid))
+    if not path.startswith(root+os.sep): raise HTTPException(status_code=422,detail="invalid_path")
+    os.makedirs(os.path.dirname(path),exist_ok=True)
+    with open(path,"wb") as out: out.write(data)
     row=SharedFileRow(id=fid,event_id=event_id,sender_id=sender_id,name=file.filename or "file",
         mime_type=msg_attachments.clean_mime_type(mime_type or file.content_type),size_bytes=len(data),storage_path=str(path),
         sha256=digest,created_at=datetime.now(UTC),folder=folder if folder in FILE_FOLDERS else "divers")
