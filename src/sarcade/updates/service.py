@@ -114,7 +114,8 @@ def evaluate_client(db: Session, device_id: str, platform: str | None, app_versi
                            details={"version": row.app_version, "platform": row.platform})
         row.invited_at = row.invited_for = None
         row.deferred_logged = row.refused_logged = False
-        return {"status": "ok", "min_version": min_version, "deadline": None}
+        return {"status": "ok", "min_version": min_version, "deadline": None,
+                "latest": store_release(db, row.platform)}
     if row.invited_at is None or row.invited_for != min_version:
         row.invited_at, row.invited_for = now, min_version
         row.deferred_logged = row.refused_logged = False
@@ -134,7 +135,19 @@ def evaluate_client(db: Session, device_id: str, platform: str | None, app_versi
                        source_ip=source_ip, details={"version": row.app_version, "min_version": min_version})
     package = (get_value(db, "client_packages", {}) or {}).get(platform or "")
     return {"status": status, "min_version": min_version, "deadline": journal.iso(deadline) if deadline else None,
-            "package": package_info(platform, package) if package else None}
+            "package": package_info(platform, package) if package else None,
+            "latest": store_release(db, row.platform)}
+
+
+def store_release(db: Session, platform: str | None) -> dict | None:
+    """Last version published on the store of a phone (Play Store for
+    Android, TestFlight for iPhone): administration setting
+    ``clients.releases``, else ``SARCADE_CLIENT_RELEASE_ANDROID`` /
+    ``SARCADE_CLIENT_RELEASE_IOS`` (« 0.1.0+415 »)."""
+    if platform not in policy.STORE_PLATFORMS:
+        return None
+    release = admin_settings(db)["clients"]["releases"].get(platform)
+    return release or policy.parse_release(os.getenv(f"SARCADE_CLIENT_RELEASE_{platform.upper()}"))
 
 
 def package_info(platform: str, package: dict) -> dict:

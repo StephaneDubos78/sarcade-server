@@ -2,7 +2,8 @@ from datetime import datetime
 import uuid
 
 from geoalchemy2 import Geography
-from sqlalchemy import JSON, BigInteger, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import false
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
@@ -109,6 +110,10 @@ class MessageRow(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     attachments: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Deleted for everyone: the original body stays here for the PCO only.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    deleted_by_pco: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
 
 class AckRow(Base):
     __tablename__ = "acks"

@@ -7,7 +7,7 @@ import sqlalchemy as sa
 
 revision = "0023"
 # 0022 is reserved by another subject: if it is merged first, chain on it.
-down_revision = "0021"
+down_revision = "0022"
 branch_labels = None
 depends_on = None
 
