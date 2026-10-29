@@ -45,6 +45,12 @@ def require_admin(request: Request, db: Session = Depends(get_db)) -> str:
     expected = os.getenv("SARCADE_ADMIN_TOKEN", "")
     if not expected:
         return "admin"
+    # An administrator signed in through Cloudflare Access (email checked).
+    from sarcade import roles
+    from .roles import checked_email
+    email = checked_email(request)
+    if email is not None and "admin" in roles.roles_of(db, email):
+        return email
     given = request.headers.get("authorization", "")
     token = given[7:] if given.lower().startswith("bearer ") else ""
     if not token or not hmac.compare_digest(token.encode(), expected.encode()):

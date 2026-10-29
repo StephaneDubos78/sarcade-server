@@ -174,9 +174,10 @@ def server_callsign() -> str:
 def queue_transmission(event_settings_data: dict, device: DeviceRow | None, lat: float, lon: float,
                        now: datetime) -> bool:
     """Local radio transmission of a consenting operator's position, as an
-    object under the ADRASEC callsign. Never sent to APRS-IS."""
+    object under the callsign chosen by the PCO. Never sent to APRS-IS."""
     s = event_settings.merged(event_settings_data)
-    call = server_callsign()
+    # Callsign chosen by the PCO of the event; the server one as fallback.
+    call = s["aprs_tx_callsign"] or server_callsign()
     if (not s["aprs_tx_rf"] or device is None or not device.aprs_tx_consent or not device.callsign
             or not call or runtime.tx_queue is None or not runtime.radio.connected):
         return False
