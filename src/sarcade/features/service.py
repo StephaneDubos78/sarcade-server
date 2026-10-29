@@ -102,6 +102,12 @@ def validate_upsert(payload: dict, *, event_id: str, object_id: str) -> dict:
     # Géorepérage (ATAK 5): the PCO is warned when a team enters or leaves.
     if payload.get("geofence") is True and kind in ("zone", "rectangle", "circle"):
         extra["geofence"] = True
+    # Transparency of the object (29 Oct 2026): kept only below 100 %.
+    opacity = payload.get("opacity")
+    if opacity is not None:
+        opacity = _num(opacity, 0.1, 1.0, "invalid_opacity")
+        if opacity < 1.0:
+            extra["opacity"] = round(opacity, 2)
     return {
         **extra,
         "id": object_id,
@@ -242,6 +248,8 @@ def feature_geojson(row) -> dict:
     }
     if data.get("label"):
         properties["name"] = data["label"]
+    if data.get("opacity") is not None:
+        properties["stroke-opacity"] = properties["fill-opacity"] = data["opacity"]
     if row.kind == "circle":
         properties["radius_m"] = data["radius_m"]
     if row.kind == "bearing":
