@@ -6,6 +6,7 @@
   (Access); the PCO chooses the event and approves.
 - API: pairing, approval (PCO), state read by the TV, list and revocation
   of the screens of an event (PCO)."""
+import html
 import secrets
 import time
 import uuid
@@ -150,19 +151,17 @@ def revoke_display(event_id: str, display_id: str, db: Session = Depends(get_db)
 
 
 @router.get("/tv/approve")
-def approve_page(code: str = "", db: Session = Depends(get_db)):
+def approve_page(db: Session = Depends(get_db)):
+    """The code comes from the QR code (?code=…): read by the page script,
+    never written into the HTML by the server."""
     events = db.scalars(select(EventRow).where(EventRow.ended_at.is_(None)).order_by(EventRow.created_at.desc())).all()
-    options = "".join(f'<option value="{e.id}">{_esc(e.name)}</option>' for e in events)
-    return HTMLResponse(_APPROVE.replace("__CODE__", _esc(code)[:12]).replace("__OPTIONS__", options), headers=NO_STORE)
+    options = "".join(f'<option value="{html.escape(e.id)}">{html.escape(e.name or "")}</option>' for e in events)
+    return HTMLResponse(_APPROVE.replace("__OPTIONS__", options), headers=NO_STORE)
 
 
 @router.get("/tv")
 def tv_page():
     return HTMLResponse(_TV.replace("__NONCE__", secrets.token_hex(4)), headers=NO_STORE)
-
-
-def _esc(s: str) -> str:
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 _APPROVE = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
@@ -173,10 +172,11 @@ h1{font-size:22px}label{display:block;margin:14px 0 4px;font-weight:600}input,se
 button{background:#0b4f8a;color:#fff;border:0;margin-top:18px}#r{margin-top:16px}</style></head><body>
 <h1>Afficher SARCADE sur un écran</h1>
 <p>Choisissez l'événement à afficher sur la TV, puis validez.</p>
-<label for="c">Code affiché sur la TV</label><input id="c" value="__CODE__" autocapitalize="characters">
+<label for="c">Code affiché sur la TV</label><input id="c" autocapitalize="characters" maxlength="12">
 <label for="e">Événement</label><select id="e">__OPTIONS__</select>
 <button id="b">Afficher sur la TV</button><p id="r"></p>
-<script>document.getElementById('b').onclick=async()=>{const r=await fetch('/api/v0.1/tv/approve',{method:'POST',
+<script>document.getElementById('c').value=(new URLSearchParams(location.search).get('code')||'').slice(0,12);
+document.getElementById('b').onclick=async()=>{const r=await fetch('/api/v0.1/tv/approve',{method:'POST',
 headers:{'content-type':'application/json'},body:JSON.stringify({code:document.getElementById('c').value,event_id:document.getElementById('e').value})});
 document.getElementById('r').textContent=r.ok?'C\\u2019est fait : la TV affiche l\\u2019événement.':(r.status==403?'Réservé au PCO.':'Code inconnu ou expiré.');};</script>
 </body></html>"""
