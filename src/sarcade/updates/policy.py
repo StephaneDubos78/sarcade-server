@@ -12,7 +12,9 @@ DEFAULTS = {
     "maintenance": {"timezone": "Europe/Paris", "auto_updates_suspended": False,
                     "windows": [{"days": [1], "start": "03:00", "end": "05:00"}]},
     "journal_retention_days": 365,
-    "clients": {"min_version": None},
+    # Last version published on the stores (Play Store, TestFlight), shown
+    # as « Nouvelle version disponible » on phones; never an obligation.
+    "clients": {"min_version": None, "releases": {}},
     # Navigation level 1 (decision of 10 Oct 2026): application opened
     # directly by « Open in… », and hiding of the apps that send data.
     "navigation": {"app": "operator", "hide_tracking_apps": False},
@@ -92,7 +94,7 @@ def validate(settings: dict) -> dict:
     mv = c.get("min_version")
     if mv is not None and (not isinstance(mv, str) or not _VERSION.match(mv.strip())):
         raise InvalidSettings("invalid_min_version")
-    out["clients"] = {"min_version": mv.strip() if mv else None}
+    out["clients"] = {"min_version": mv.strip() if mv else None, "releases": validate_releases(c.get("releases"))}
     nav = settings.get("navigation", {}) or {}
     if not isinstance(nav, dict):
         raise InvalidSettings("invalid_navigation")
@@ -118,6 +120,43 @@ def validate(settings: dict) -> dict:
         raise InvalidSettings("invalid_aprs_is_port")
     out["aprs"] = {"is_host": host, "is_port": port}
     return out
+
+
+STORE_PLATFORMS = ("android", "ios")
+
+
+def validate_releases(releases) -> dict:
+    """{"android": {"version": "0.1.0", "build": 415, "url": None}, "ios": …}."""
+    if releases is None:
+        return {}
+    if not isinstance(releases, dict) or set(releases) - set(STORE_PLATFORMS):
+        raise InvalidSettings("invalid_releases")
+    out = {}
+    for platform, r in releases.items():
+        if r is None:
+            continue
+        if not isinstance(r, dict):
+            raise InvalidSettings("invalid_releases")
+        v, build, url = r.get("version"), r.get("build"), r.get("url")
+        if not isinstance(v, str) or not _VERSION.match(v.strip()):
+            raise InvalidSettings("invalid_release_version")
+        if build is not None and (isinstance(build, bool) or not isinstance(build, int) or build < 0):
+            raise InvalidSettings("invalid_release_build")
+        if url is not None and (not isinstance(url, str) or not url.startswith(("https://", "itms-beta://", "market://"))):
+            raise InvalidSettings("invalid_release_url")
+        out[platform] = {"version": v.strip(), "build": build, "url": url}
+    return out
+
+
+def parse_release(value: str | None) -> dict | None:
+    """« 0.1.0+415 » (environment variable) → {"version", "build", "url"}."""
+    if not value or not value.strip():
+        return None
+    v = value.strip()
+    core, _, build = v.partition("+")
+    if not _VERSION.match(core) or (build and not build.isdigit()):
+        return None
+    return {"version": core, "build": int(build) if build else None, "url": None}
 
 
 def _minutes(hhmm: str) -> int:

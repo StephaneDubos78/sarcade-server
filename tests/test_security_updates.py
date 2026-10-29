@@ -127,3 +127,44 @@ def test_admin_actions_are_recognised():
     assert admin_action("DELETE", "/api/v0.1/basemaps/pref") == ("basemap_changed", None)
     assert admin_action("GET", "/api/v0.1/events/e1/routes/r1.gpx") == ("data_exported", "e1")
     assert admin_action("GET", "/api/v0.1/events/e1") is None
+
+
+def test_store_releases_validated_and_read_from_environment(monkeypatch):
+    s = policy.validate({"clients": {"releases": {"android": {"version": "0.2.0", "build": 415}}}})
+    assert s["clients"]["releases"] == {"android": {"version": "0.2.0", "build": 415, "url": None}}
+    assert policy.validate({})["clients"]["releases"] == {}
+    for bad in ({"windows": {"version": "1.0"}}, {"ios": {"version": "x"}}, {"ios": {"version": "1.0", "build": -1}},
+                {"ios": {"version": "1.0", "url": "http://x"}}):
+        with pytest.raises(policy.InvalidSettings):
+            policy.validate({"clients": {"releases": bad}})
+    assert policy.parse_release("0.3.0+512") == {"version": "0.3.0", "build": 512, "url": None}
+    assert policy.parse_release("0.3.0") == {"version": "0.3.0", "build": None, "url": None}
+    assert policy.parse_release("abc+x") is None and policy.parse_release("") is None
+
+
+def test_client_check_carries_the_store_release(monkeypatch):
+    from sqlalchemy import BigInteger, create_engine
+    from sqlalchemy.ext.compiler import compiles
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from sarcade.db.base import Base
+    from sarcade.db.models import ClientDeviceRow, SecurityEventRow, ServerSettingRow
+    from sarcade.updates import service
+
+    @compiles(BigInteger, "sqlite")
+    def _bigint(type_, compiler, **kw):
+        return "INTEGER"
+
+    engine = create_engine("sqlite://", poolclass=StaticPool)
+    Base.metadata.create_all(engine, tables=[t.__table__ for t in (ServerSettingRow, ClientDeviceRow, SecurityEventRow)])
+    db = sessionmaker(bind=engine)()
+    now = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
+    monkeypatch.setenv("SARCADE_CLIENT_RELEASE_ANDROID", "0.4.0+600")
+    monkeypatch.delenv("SARCADE_CLIENT_RELEASE_IOS", raising=False)
+    assert service.evaluate_client(db, "TEL", "android", "0.1.0", now)["latest"] == \
+        {"version": "0.4.0", "build": 600, "url": None}
+    assert service.evaluate_client(db, "IPH", "ios", "0.1.0", now)["latest"] is None
+    assert service.evaluate_client(db, "PC", "windows", "0.1.0", now)["latest"] is None
+    service.set_value(db, "admin", {"clients": {"releases": {"android": {"version": "0.5.0", "build": 700}}}})
+    assert service.evaluate_client(db, "TEL", "android", "0.1.0", now)["latest"]["build"] == 700
