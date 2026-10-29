@@ -81,6 +81,11 @@ check(c.get(f"{API}/clients/windows/package").content == b"MSIX-demo-package", "
 r = c.post(f"{API}/clients/check", json={"device_id": device, "platform": "windows", "app_version": "0.2.0"}).json()
 check(r["status"] == "ok", "updated client accepted")
 c.patch(f"{API}/admin/settings", headers=ADMIN, json={"settings": {"clients": {"min_version": None}}})
+c.patch(f"{API}/admin/settings", headers=ADMIN,
+        json={"settings": {"clients": {"releases": {"android": {"version": "0.9.0", "build": 900}}}}})
+rel = c.post(f"{API}/clients/check", json={"device_id": "TEL-STORE", "platform": "android", "app_version": "0.1.0"}).json()
+check(rel["latest"] == {"version": "0.9.0", "build": 900, "url": None}, "store release given to Android phones")
+c.patch(f"{API}/admin/settings", headers=ADMIN, json={"settings": {"clients": {"releases": {}}}})
 updates = [e["action"] for e in c.get(f"{API}/admin/security-journal", headers=ADMIN,
                                       params={"category": "update"}).json()]
 for needle in ("client_invited", "client_updated", "server_update_signature_invalid", "install_now",
