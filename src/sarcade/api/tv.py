@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from sarcade import tv
+from sarcade import roles, tv
 from sarcade.db.models import EventRow, LogbookRow, MapFeatureRow, MessageRow, PositionRow, ReferenceSiteRow
 from sarcade.features import service as features
 from sarcade.weather import service as weather_service
@@ -83,7 +83,8 @@ def pair_status(pair_id: str, db: Session = Depends(get_db)):
     now = time.time()
     displays = [d for d in _displays(db) if d.get("expires", 0) > now - 7 * 24 * 3600]
     displays.append({"id": str(uuid.uuid4()), "hash": tv.token_hash(token), "event_id": event_id,
-                     "created": now, "expires": now + tv.TOKEN_TTL_S, "revoked": False, "code": p.code})
+                     "created": now, "expires": now + tv.TOKEN_TTL_S, "revoked": False, "code": p.code,
+                     "owner": p.approved_by})
     set_value(db, KEY, displays)
     db.commit()
     return {"status": "approved", "token": token, "event_id": event_id}
@@ -100,7 +101,7 @@ def approve(body: ApproveIn, request: Request, db: Session = Depends(get_db)):
     event = db.get(EventRow, body.event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="event_not_found")
-    p = tv.store.approve(body.code, body.event_id)
+    p = tv.store.approve(body.code, body.event_id, approved_by=checked_email(request))
     if p is None:
         raise HTTPException(status_code=404, detail="unknown_code")
     db.add(LogbookRow(event_id=body.event_id, kind="display", object_id=None, actor_id=actor,
@@ -188,13 +189,8 @@ def state(request: Request, fr: str | None = Query(None, max_length=32), rr: str
                  for r in rows]
     msgs = db.scalars(select(MessageRow).where(MessageRow.event_id == event.id)
                       .order_by(MessageRow.created_at.desc()).limit(60)).all()
-    messages = [{"sender_id": m.sender_id, "recipient_ids": m.recipient_ids or [], "priority": m.priority,
-                 "body": m.body, "created_at": m.created_at} for m in reversed(msgs)]
-    logs = db.scalars(select(LogbookRow).where(LogbookRow.event_id == event.id)
-                      .where(LogbookRow.kind.not_in(tuple(tv.TV_HIDDEN_LOG_KINDS)))
-                      .order_by(LogbookRow.seq.desc()).limit(12)).all()
-    logbook = [{"time": r.time, "actor_id": r.actor_id, "kind": r.kind, "summary": r.summary} for r in reversed(logs)]
-    snap = tv.snapshot({"id": event.id, "name": event.name}, positions, messages, logbook)
+    snap = tv.snapshot({"id": event.id, "name": event.name}, positions, [_msg(m) for m in reversed(msgs)])
+    snap.update(_alert(db, event.id, d))
     view = d.get("view")
     layers = _map_layers(db, event.id, tv.display_options(view), fr, rr)
     snap = tv.apply_view(snap, view, datetime.now(UTC), weather=_weather(db, event.id),
@@ -205,12 +201,66 @@ def state(request: Request, fr: str | None = Query(None, max_length=32), rr: str
     return snap
 
 
+def _msg(m: MessageRow) -> dict:
+    return {"sender_id": m.sender_id, "recipient_ids": m.recipient_ids or [], "priority": m.priority,
+            "body": m.body, "created_at": m.created_at}
+
+
+def _alert(db: Session, event_id: str, display: dict) -> dict:
+    """Red banner and SOS reminder of a screen, from the last immediate and
+    urgent messages (distress and end of distress)."""
+    rows = db.scalars(select(MessageRow).where(MessageRow.event_id == event_id,
+                                               MessageRow.priority.in_(("immediate", "urgent")))
+                      .order_by(MessageRow.created_at.desc()).limit(300)).all()
+    return tv.alert_state([_msg(m) for m in reversed(rows)], datetime.now(UTC), display.get("alert_cleared"))
+
+
 @router.get("/api/v0.1/events/{event_id}/displays")
-def list_displays(event_id: str, db: Session = Depends(get_db)):
+def list_displays(event_id: str, request: Request, db: Session = Depends(get_db)):
     now = time.time()
-    return [{"id": d["id"], "code": d.get("code"), "created": d["created"], "expires": d["expires"],
-             "active": not d.get("revoked") and d["expires"] > now}
-            for d in _displays(db) if d.get("event_id") == event_id]
+    email = checked_email(request)
+    admin = email is not None and "admin" in roles.roles_of(db, email)
+    out = []
+    for d in _displays(db):
+        if d.get("event_id") != event_id:
+            continue
+        active = not d.get("revoked") and d["expires"] > now
+        out.append({"id": d["id"], "code": d.get("code"), "created": d["created"], "expires": d["expires"],
+                    "active": active, "owner": d.get("owner"),
+                    "alert": active and _alert(db, event_id, d)["alert"] is not None,
+                    "can_clear_alert": _may_clear(d, email, admin)})
+    return out
+
+
+def _may_clear(display: dict, email: str | None, admin: bool) -> bool:
+    """The person who paired the screen (email checked by Access) or an
+    administrator. Without a checked email (local network without Access)
+    the server cannot know who calls: allowed, as for the other rights."""
+    if email is None:
+        return True
+    return admin or (display.get("owner") or "").lower() == email
+
+
+@router.post("/api/v0.1/events/{event_id}/displays/{display_id}/alert/clear")
+def clear_alert(event_id: str, display_id: str, request: Request, db: Session = Depends(get_db)):
+    """« Retirer le bandeau SOS » of one screen: the messages received up to
+    now no longer show the red banner there; a new immediate message shows
+    it again, and the SOS reminder of the top bar stays until the end of
+    the distress."""
+    email = checked_email(request)
+    admin = email is not None and "admin" in roles.roles_of(db, email)
+    displays = _displays(db)
+    for d in displays:
+        if d["id"] == display_id and d.get("event_id") == event_id and not d.get("revoked"):
+            if not _may_clear(d, email, admin):
+                raise HTTPException(status_code=403, detail="owner_or_admin_required")
+            d["alert_cleared"] = time.time()
+            set_value(db, KEY, displays)
+            db.add(LogbookRow(event_id=event_id, kind="display", object_id=None, actor_id=_actor(request),
+                              summary=f"Bandeau SOS retiré de l'écran (code {d.get('code')})", time=datetime.now(UTC)))
+            db.commit()
+            return {"cleared": True}
+    raise HTTPException(status_code=404, detail="display_not_found")
 
 
 @router.delete("/api/v0.1/events/{event_id}/displays/{display_id}", status_code=204)
@@ -328,13 +378,15 @@ h2{font-size:16px;color:#b9c6d2;text-transform:uppercase;letter-spacing:1px;marg
 .blab span{display:inline-block;white-space:nowrap;background:rgba(3,21,43,.85);color:#fff;border-left:4px solid;padding:2px 6px;font-size:14px;border-radius:4px}
 .txt span{white-space:nowrap;font-size:16px;font-weight:700;text-shadow:0 0 3px #000}
 .lowzoom .rlab{display:none}
+#sos{display:none;background:#ff4d5e;color:#fff;font-weight:800;font-size:16px;border-radius:999px;padding:3px 10px;animation:blink 1.2s steps(2,start) infinite}
+@keyframes blink{to{visibility:hidden}}
 #alert{display:none;position:fixed;left:0;right:0;top:0;padding:18px;background:#ff4d5e;color:#fff;font-size:30px;font-weight:700;text-align:center;z-index:2000}
 </style></head><body>
 <div id="pair"><div class="left"><div class="logo"><img src="/tv/logo.png" alt="SARCADE"></div>
 <div class="lead">Afficher SARCADE sur cet écran</div><div id="code">······</div>
 <div class="how">Dans l'application SARCADE : <b>Paramètres › Affichage › Écrans</b>, puis scannez le QR code ou saisissez ce code.</div>
 <div id="hint"></div></div><div id="qr"></div></div>
-<div id="app"><header><div class="hlogo"><img src="/tv/logo.png" alt="SARCADE"></div><div id="title"></div><div class="stats"><span><b id="nOps">0</b> opérateurs actifs</span><span><b id="nAprs">0</b> stations APRS</span><span id="link"><span class="dot"></span><span id="linkTxt">Connexion…</span></span></div><div id="wx"></div><div id="sun"></div><div id="clock">--:--</div></header><div id="map"></div><aside><div id="msgBox"><h2>Messages</h2><div id="msgs"></div></div><h2>Main courante</h2><div id="log"></div></aside></div>
+<div id="app"><header><div class="hlogo"><img src="/tv/logo.png" alt="SARCADE"></div><div id="title"></div><div class="stats"><span><b id="nOps">0</b> opérateurs actifs</span><span><b id="nAprs">0</b> stations APRS</span><span id="link"><span class="dot"></span><span id="linkTxt">Connexion…</span></span></div><span id="sos" title="Détresse en cours">SOS</span><div id="wx"></div><div id="sun"></div><div id="clock">--:--</div></header><div id="map"></div><aside><div id="msgBox"><h2>Messages</h2><div id="msgs"></div></div></aside></div>
 <div id="alert"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -431,10 +483,11 @@ layers(s);weather(s.weather);
 declutter();
 applyView(s.view);
 if(pts.length&&!map._fitted){map.fitBounds(pts,{padding:[40,40],maxZoom:15});map._fitted=true;}
-$('msgs').innerHTML=s.messages.slice(-8).reverse().map(m=>'<div class="m '+(m.priority==='immediate'?'i':m.priority==='urgent'?'u':'')+'">'+hm(m.created_at)+' · <b>'+esc(m.sender_id)+'</b> : '+esc(m.body)+'</div>').join('');
-$('log').innerHTML=s.logbook.slice(-8).reverse().map(l=>'<div class="m">'+hm(l.time)+' · '+esc(l.summary)+'</div>').join('');
-const recent=s.messages.filter(m=>m.priority==='immediate'&&Date.now()-new Date(m.created_at)<10*60000).pop();
-$('alert').style.display=recent?'block':'none';if(recent)$('alert').textContent=recent.sender_id+' : '+recent.body;}
+$('msgs').innerHTML=s.messages.slice(-14).reverse().map(m=>'<div class="m '+(m.priority==='immediate'?'i':m.priority==='urgent'?'u':'')+'">'+hm(m.created_at)+' · <b>'+esc(m.sender_id)+'</b> : '+esc(m.body)+'</div>').join('');
+// Red banner chosen by the server (cleared from a phone, or closed by « Fin
+// de détresse »); the SOS pill stays while a distress is not closed.
+const a=s.alert;$('alert').style.display=a?'block':'none';if(a)$('alert').textContent=a.sender_id+' : '+a.body;
+const sos=s.sos||[];$('sos').style.display=sos.length?'inline-block':'none';$('sos').title='Détresse en cours : '+sos.join(', ');}
 function start(){$('pair').style.display='none';$('app').style.display='grid';map=L.map('map',{zoomControl:false}).setView([46.6,2.4],6);
 setBase(null);map.on('zoomend moveend',declutter);drawL=L.layerGroup().addTo(map);brgL=L.layerGroup().addTo(map);refL=L.layerGroup().addTo(map);
 map.on('zoomend',()=>map.getContainer().classList.toggle('lowzoom',map.getZoom()<12));map.getContainer().classList.add('lowzoom');tick();setInterval(tick,1000);refresh();setInterval(refresh,10000);}

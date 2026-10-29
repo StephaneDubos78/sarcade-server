@@ -26,6 +26,7 @@ class Pairing:
     created: float
     event_id: str | None = None
     token: str | None = None
+    approved_by: str | None = None
 
 
 @dataclass
@@ -63,14 +64,15 @@ class Store:
         self.by_code[code] = p.pair_id
         return p
 
-    def approve(self, code: str, event_id: str, now: float | None = None) -> Pairing | None:
+    def approve(self, code: str, event_id: str, now: float | None = None,
+                approved_by: str | None = None) -> Pairing | None:
         now = now or time.time()
         self._purge(now)
         pid = self.by_code.get(code.strip().upper().replace(" ", ""))
         p = self.pairings.get(pid) if pid else None
         if p is None or p.token is not None:
             return None
-        p.event_id, p.token = event_id, secrets.token_urlsafe(32)
+        p.event_id, p.token, p.approved_by = event_id, secrets.token_urlsafe(32), approved_by
         return p
 
     def status(self, pair_id: str, now: float | None = None) -> Pairing | None:
@@ -95,21 +97,68 @@ def valid_display(displays: list[dict], token: str, now: float | None = None) ->
     return None
 
 
-# Logbook lines never shown on a TV: acknowledgements are technical traces
-# (« received: <id> »), and message lines would repeat the messages panel
-# and could reveal direct chats or channels. Device versions and contact
-# lines are technical, for the PCO only.
-TV_HIDDEN_LOG_KINDS = frozenset({"ack", "message", "device_version", "contact"})
-
-
-def snapshot(event: dict, positions: list[dict], messages: list[dict], logbook: list[dict]) -> dict:
-    """What a TV may show: positions, the general messages only (never the
-    direct chats or channels), the last operational logbook lines."""
+def snapshot(event: dict, positions: list[dict], messages: list[dict]) -> dict:
+    """What a TV may show: positions and the general messages only (never
+    the direct chats or channels). The logbook is no longer shown on the TV
+    (decision of the porteur, 29 Oct 2026)."""
     public = [m for m in messages if not m.get("recipient_ids")]
-    log = [{k: v for k, v in r.items() if k != "kind"} for r in logbook
-           if r.get("kind") not in TV_HIDDEN_LOG_KINDS]
     return {"event": {"id": event["id"], "name": event.get("name", "")},
-            "positions": positions, "messages": public[-12:], "logbook": log[-12:]}
+            "positions": positions, "messages": public[-12:]}
+
+
+# --- SOS banner (29 Oct 2026) -----------------------------------------------
+# The app sends « 🆘 DÉTRESSE — <who> — position … » (immediate) and
+# « Fin de détresse — <who> » (urgent), see distress.body / distress.endBody.
+
+ALERT_WINDOW = timedelta(minutes=10)
+END_PREFIXES = ("fin de détresse", "end of distress")
+
+
+def is_distress(m: dict) -> bool:
+    return m.get("priority") == "immediate" and str(m.get("body") or "").lstrip().startswith("🆘")
+
+
+def is_distress_end(m: dict) -> bool:
+    return str(m.get("body") or "").strip().lower().startswith(END_PREFIXES)
+
+
+def open_distress(messages: list[dict]) -> dict[str, dict]:
+    """Distress not closed yet, by sender: the last « 🆘 » message of a sender
+    not followed by a « Fin de détresse » of the same sender. General
+    messages only, in chronological order."""
+    out: dict[str, dict] = {}
+    for m in sorted((m for m in messages if not m.get("recipient_ids")),
+                    key=lambda m: _time(m.get("created_at")) or datetime.min.replace(tzinfo=UTC)):
+        who = m.get("sender_id")
+        if is_distress(m):
+            out[who] = m
+        elif is_distress_end(m):
+            out.pop(who, None)
+    return out
+
+
+def alert_state(messages: list[dict], now: datetime, cleared_at: float | None = None) -> dict:
+    """Red banner of a TV and the small SOS reminder of its top bar.
+
+    - ``alert``: the last general immediate message of the last 10 minutes,
+      unless it was cleared on this screen (``cleared_at``, epoch seconds)
+      or it is a distress already closed by a « Fin de détresse » ;
+    - ``sos``: senders whose distress is not closed (kept after a clear)."""
+    public = [m for m in messages if not m.get("recipient_ids")]
+    still = open_distress(public)
+    alert = None
+    for m in public:
+        t = _time(m.get("created_at"))
+        if m.get("priority") != "immediate" or t is None or now - t > ALERT_WINDOW:
+            continue
+        if cleared_at is not None and t.timestamp() <= cleared_at:
+            continue
+        if is_distress(m) and still.get(m.get("sender_id")) is not m:
+            continue
+        if alert is None or t >= _time(alert.get("created_at")):
+            alert = m
+    return {"alert": {k: alert.get(k) for k in ("sender_id", "body", "created_at")} if alert else None,
+            "sos": sorted(still)}
 
 
 def clean_view(view: dict | None, now: float | None = None) -> dict | None:
