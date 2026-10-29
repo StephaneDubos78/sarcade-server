@@ -53,3 +53,19 @@ def test_tv_logbook_hides_acks_and_messages():
         {"kind": "display", "summary": "Écran d'affichage appairé"}, {"kind": "settings", "summary": "Seuil modifié"}])
     assert [r["summary"] for r in s["logbook"]] == ["Écran d'affichage appairé", "Seuil modifié"]
     assert all("kind" not in r for r in s["logbook"])
+
+
+def test_any_operator_pairs_a_tv():
+    """Decision of 29 Oct 2026: approving or revoking a TV is not a PCO right."""
+    import inspect
+    from types import SimpleNamespace
+    for fn in (api.approve, api.revoke_display, api.list_displays):
+        assert "require_pco" not in inspect.getsource(fn)
+    req = SimpleNamespace(state=SimpleNamespace(access=SimpleNamespace(email="op@x.fr")))
+    assert api._actor(req) == "op@x.fr"
+    assert api._actor(SimpleNamespace(state=SimpleNamespace())) == "opérateur"
+
+
+def test_tv_logo_is_served_on_the_tv_address():
+    assert api.tv_host_allows("/tv/logo.png")
+    assert api._LOGO.is_file()
