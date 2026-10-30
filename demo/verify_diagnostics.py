@@ -31,4 +31,6 @@ res = d["resources"]
 check(res["memory"] and 0 < res["memory"]["pct"] <= 100, "memory read from /proc/meminfo")
 check(res["disk"] and res["disk"]["total_gb"] > 0, "disk seen from the container")
 check(res["cpu_pct"] is None or 0 <= res["cpu_pct"] <= 100, "processor from /proc/stat")
+cl = c.get(f"{API}/diagnostics/client").json()
+check(cl["ip"] and cl["via_cloudflare"] is False, f"client address seen by the server: {cl['ip']}")
 print("diagnostics: all checks passed")

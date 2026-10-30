@@ -85,3 +85,10 @@ def test_route_refused_without_pco(client, monkeypatch):
         raise HTTPException(status_code=403, detail="pco_required")
     app.dependency_overrides[roles_api.require_pco] = refuse
     assert client.get("/api/v0.1/diagnostics/server").status_code == 403
+
+
+def test_client_route(client):
+    body = client.get("/api/v0.1/diagnostics/client", headers={"cf-connecting-ip": "203.0.113.7", "cf-ray": "x"}).json()
+    assert body["ip"] == "203.0.113.7" and body["via_cloudflare"] is True and body["email"] is None
+    body = client.get("/api/v0.1/diagnostics/client", headers={"x-forwarded-for": "198.51.100.2, 10.0.0.1"}).json()
+    assert body["ip"] == "198.51.100.2" and body["via_cloudflare"] is False

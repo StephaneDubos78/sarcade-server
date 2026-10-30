@@ -101,6 +101,19 @@ def _last_backup(db: Session) -> dict | None:
     return None
 
 
+@router.get("/diagnostics/client")
+def client_diagnostics(request: Request):
+    """Bloc « Cet appareil » and « Liaisons » (everyone): the public address
+    of the caller as the server sees it (Cloudflare ``cf-connecting-ip``,
+    else the first ``x-forwarded-for``, else the socket), whether the request
+    came through Cloudflare, and the email checked by Access."""
+    h = request.headers
+    ip = h.get("cf-connecting-ip") or (h.get("x-forwarded-for") or "").split(",")[0].strip() or \
+        (request.client.host if request.client else None)
+    return {"ip": ip, "via_cloudflare": bool(h.get("cf-ray")), "email": checked_email(request),
+            "version": updates.installed_version(), "at": datetime.now(UTC).isoformat().replace("+00:00", "Z")}
+
+
 @router.get("/diagnostics/server")
 async def server_diagnostics(request: Request, db: Session = Depends(get_db), _pco=Depends(require_pco)):
     # Without a checked email the previous behaviour is kept by require_pco;
