@@ -5,6 +5,7 @@ Note fonctionnelle : « Réveil des appareils (notifications application fermée
 ## Principe
 À chaque nouveau message, le serveur envoie aux appareils concernés un **signal sans contenu** :
 `{"type": "wake", "kind": "message", "event_id": "…", "priority": "immediate"}`.
+Le signal porte aussi `tag`, la **clé de notification** (30 octobre 2026, « Détresse, une seule notification ») : l'identifiant du message, ou pour une détresse (immédiat « 🆘 » à tous) et sa « Fin de détresse » une clé de l'expéditeur `sos-xxxxxxxx` (FNV-1a de `événement|appareil`, sans indicatif). L'application donne la même clé à sa notification : une seule notification par message quel que soit le chemin (temps réel, synchronisation, réveil), la fin de détresse remplace la détresse (Android : même identifiant ; iPhone : `apns-collapse-id` ; web : même `tag`).
 L'appareil se réveille, synchronise par SARCADE et affiche sa propre notification. Ni Google, ni Apple, ni les services Web Push ne voient le texte, l'expéditeur ou une position.
 
 | Plateforme | Service | Réglage serveur |

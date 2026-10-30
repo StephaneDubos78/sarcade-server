@@ -66,9 +66,45 @@ def routine_allowed(event_id: str, device_id: str, now: float | None = None) -> 
     return True
 
 
-def signal(event_id: str, priority: str, kind: str = "message") -> dict[str, str]:
-    """The whole content of a wake-up: no text, no callsign, no position."""
-    return {"type": "wake", "kind": kind, "event_id": event_id, "priority": priority}
+def signal(event_id: str, priority: str, kind: str = "message", tag: str | None = None) -> dict[str, str]:
+    """The whole content of a wake-up: no text, no callsign, no position.
+    [tag]: key of the notification, the same as the one the application
+    gives to the message (one notification per message, per distress)."""
+    data = {"type": "wake", "kind": kind, "event_id": event_id, "priority": priority}
+    if tag:
+        data["tag"] = tag
+    return data
+
+
+def _fnv1a(text: str) -> int:
+    """FNV-1a 32 bits over UTF-16 code units, as the application (Dart)."""
+    h = 0x811C9DC5
+    raw = text.encode("utf-16-le")
+    for i in range(0, len(raw), 2):
+        h ^= raw[i] | (raw[i + 1] << 8)
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def sos_key(event_id: str, sender_id: str) -> str:
+    """Key of the distress notifications of a sender (no callsign in it)."""
+    return f"sos-{_fnv1a(f'{event_id}|{sender_id}'):08x}"
+
+
+def notification_tag(event_id: str, message: dict) -> str | None:
+    """Card « Détresse, une seule notification » (30 Oct 2026, 12 h 45): a
+    distress (immediate « 🆘 » to everyone) and its « Fin de détresse »
+    share the key of their sender, so that the end replaces the distress;
+    any other message: its identifier."""
+    body = str(message.get("body") or "")
+    recipients = message.get("recipient_ids") or []
+    low = body.strip().lower()
+    distress = message.get("priority") == "immediate" and body.lstrip().startswith("🆘")
+    end = low.startswith("fin de détresse") or low.startswith("end of distress")
+    if not recipients and (distress or end):
+        return sos_key(event_id, str(message.get("sender_id") or ""))
+    mid = message.get("id")
+    return str(mid) if mid else None
 
 
 def vapid_key(db: Session):
@@ -149,7 +185,7 @@ async def _send_one(client: httpx.AsyncClient, row: WakeTokenRow, data: dict[str
 
 
 async def wake(event_id: str, device_ids: list[str], priority: str, kind: str = "message",
-               force: bool = False) -> dict:
+               force: bool = False, tag: str | None = None) -> dict:
     """Sends the signal to every token of these devices. Routine messages are
     grouped unless [force] (test button)."""
     urgent = is_urgent(priority)
@@ -166,7 +202,7 @@ async def wake(event_id: str, device_ids: list[str], priority: str, kind: str = 
         vapid = vapid_key(db)
         subject = os.getenv("SARCADE_VAPID_SUBJECT") or "mailto:github@sdubos.com"
         account = fcm.load_account()
-        data = signal(event_id, priority, kind)
+        data = signal(event_id, priority, kind, tag)
         result = {"sent": 0, "failed": 0, "removed": 0}
         async with httpx.AsyncClient() as client:
             outcomes = await asyncio.gather(*[_send_one(client, r, data, urgent, vapid, subject, account) for r in rows])
@@ -199,6 +235,7 @@ async def wake_for_message(event_id: str, message: dict) -> None:
                               str(message.get("sender_id") or ""), message.get("recipient_ids"))
         finally:
             db.close()
-        await wake(event_id, sorted(set(devices)), str(message.get("priority") or "routine"))
+        await wake(event_id, sorted(set(devices)), str(message.get("priority") or "routine"),
+                   tag=notification_tag(event_id, message))
     except Exception:  # noqa: BLE001 - a wake-up failure never touches the message
         log.exception("wake-up for a message of %s failed", event_id)
