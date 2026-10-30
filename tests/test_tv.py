@@ -515,3 +515,31 @@ def test_name_rename_identify_and_theme_routes(sos_client, monkeypatch):
     c.post("/api/v0.1/tv/approve", json={"code": q["code"], "event_id": "e1"})
     c.get(f"/api/v0.1/tv/pair/{q['pair_id']}")
     assert any(x["name"] == "TV Sony · 1920×1080" for x in c.get("/api/v0.1/events/e1/displays").json())
+
+
+# --- Lot 11, « Écrans » button of the map (30 Oct 2026) -----------------------
+
+def test_screens_mine_and_live_view(sos_client, monkeypatch):
+    c, who, db = sos_client
+    monkeypatch.setattr(tv, "store", tv.Store())
+    who["email"], who["roles"] = "op@x.fr", []
+    p = c.post("/api/v0.1/tv/pair").json()
+    c.post("/api/v0.1/tv/approve", json={"code": p["code"], "event_id": "e1", "name": "Salle PCO"})
+    c.get(f"/api/v0.1/tv/pair/{p['pair_id']}")
+    d = next(x for x in c.get("/api/v0.1/events/e1/displays").json() if x["code"] == p["code"])
+    assert d["mine"] is True
+    who["email"] = "autre@x.fr"
+    d = next(x for x in c.get("/api/v0.1/events/e1/displays").json() if x["code"] == p["code"])
+    assert d["mine"] is False
+    who["email"] = None
+    assert next(x for x in c.get("/api/v0.1/events/e1/displays").json() if x["code"] == p["code"])["mine"] is True
+    # « Suivre ma vue »: one logbook line for the whole follow.
+    url = f"/api/v0.1/events/e1/displays/{d['id']}/view"
+    count = lambda: db.query(api.LogbookRow).filter(api.LogbookRow.summary.like("Vue suivie%")).count()  # noqa: E731
+    for z in (12, 13, 14):
+        assert c.put(url, json={"view": {**VIEW, "zoom": z}, "live": True}).status_code == 200
+    assert count() == 1
+    assert next(x for x in api._displays(db) if x["id"] == d["id"])["view"]["zoom"] == 14
+    c.put(url, json={"view": None})
+    c.put(url, json={"view": VIEW, "live": True})
+    assert count() == 2

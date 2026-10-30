@@ -300,8 +300,16 @@ def list_displays(event_id: str, request: Request, db: Session = Depends(get_db)
                     "messages": d.get("messages", tv.display_options(view or None)["messages"]),
                     "view_from": view.get("from") or None,
                     "alert": active and _alert(db, event_id, d)["alert"] is not None,
-                    "can_clear_alert": _may_clear(d, email, admin)})
+                    "can_clear_alert": _may_clear(d, email, admin),
+                    "mine": _is_mine(d, email)})
     return out
+
+
+def _is_mine(display: dict, email: str | None) -> bool:
+    """Screen paired by the caller (« Écrans » button of the map, lot 11).
+    Without a checked email (local network without Access) every screen
+    counts, as for the other rights."""
+    return email is None or display.get("owner") == email
 
 
 def _may_clear(display: dict, email: str | None, admin: bool) -> bool:
@@ -352,8 +360,11 @@ def revoke_display(event_id: str, display_id: str, request: Request, db: Session
 
 class ViewIn(BaseModel):
     """View of a phone copied onto a TV (« Envoyer ma vue », 29 Oct 2026);
-    ``view`` null gives the TV back its automatic framing."""
+    ``view`` null gives the TV back its automatic framing. ``live``
+    (« Suivre ma vue », lot 11): the view follows the map of the sender;
+    only the first view of a follow goes to the logbook."""
     view: dict | None = None
+    live: bool = False
 
 
 @router.put("/api/v0.1/events/{event_id}/displays/{display_id}/view")
@@ -365,11 +376,17 @@ def send_view(event_id: str, display_id: str, body: ViewIn, request: Request, db
     displays = _displays(db)
     for d in displays:
         if d["id"] == display_id and d.get("event_id") == event_id and not d.get("revoked"):
+            following = bool(body.live and view is not None and d.get("live"))
             d["view"] = view
+            d["live"] = bool(body.live and view is not None)
             if view is not None:
                 d["messages"] = view["messages"]
             set_value(db, KEY, displays)
-            text = "Vue envoyée sur l'écran" if view else "Vue par défaut rendue à l'écran"
+            if following:
+                db.commit()
+                return {"view": view}
+            text = ("Vue suivie en direct sur l'écran" if body.live else "Vue envoyée sur l'écran") if view \
+                else "Vue par défaut rendue à l'écran"
             db.add(LogbookRow(event_id=event_id, kind="display", object_id=None, actor_id=_actor(request),
                               summary=f"{text} ({_label(d.get('name'), d.get('code'))})", time=datetime.now(UTC)))
             db.commit()
