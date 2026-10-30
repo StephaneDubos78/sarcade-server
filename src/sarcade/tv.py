@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -27,6 +28,9 @@ class Pairing:
     event_id: str | None = None
     token: str | None = None
     approved_by: str | None = None
+    # Public address of the TV (« validation automatique depuis le même
+    # réseau », 30 Oct 2026): Cloudflare header, else the client address.
+    ip: str | None = None
 
 
 @dataclass
@@ -51,7 +55,7 @@ class Store:
                 self.pairings.pop(pid, None)
                 self.by_code.pop(p.code, None)
 
-    def new(self, now: float | None = None) -> Pairing:
+    def new(self, now: float | None = None, ip: str | None = None) -> Pairing:
         now = now or time.time()
         self._purge(now)
         if len(self.pairings) >= MAX_PENDING:
@@ -59,7 +63,7 @@ class Store:
         code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(6))
         while code in self.by_code:
             code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(6))
-        p = Pairing(pair_id=secrets.token_urlsafe(18), code=code, created=now)
+        p = Pairing(pair_id=secrets.token_urlsafe(18), code=code, created=now, ip=ip)
         self.pairings[p.pair_id] = p
         self.by_code[code] = p.pair_id
         return p
@@ -74,6 +78,15 @@ class Store:
             return None
         p.event_id, p.token, p.approved_by = event_id, secrets.token_urlsafe(32), approved_by
         return p
+
+    def nearby(self, ip: str | None, now: float | None = None) -> list[Pairing]:
+        """Codes still waiting, shown by a TV behind the same public address
+        (never validated here: the operator confirms)."""
+        self._purge(now or time.time())
+        if not ip:
+            return []
+        return sorted((p for p in self.pairings.values() if p.token is None and p.ip == ip),
+                      key=lambda p: p.created)
 
     def status(self, pair_id: str, now: float | None = None) -> Pairing | None:
         self._purge(now or time.time())
@@ -196,7 +209,11 @@ def clean_view(view: dict | None, now: float | None = None) -> dict | None:
 
 DEFAULT_LAYERS = {"operators": True, "aprs": True, "offline": True, "drawings": True, "bearings": True,
                   "highpoints": False, "relays": False}
-DEFAULT_OPACITY = {"ops": 1.0, "draw": 1.0, "brg": 1.0, "ref": 1.0}
+# One opacity per layer (card « Panneau des couches, opacité incohérente »,
+# 30 Oct 2026): APRS, high points and relays apart; a view of the former
+# format (ops, draw, brg, ref) gives its group value to the new keys.
+DEFAULT_OPACITY = {"ops": 1.0, "aprs": 1.0, "draw": 1.0, "brg": 1.0, "high": 1.0, "relay": 1.0}
+OPACITY_LEGACY = {"aprs": "ops", "high": "ref", "relay": "ref"}
 # Same threshold as the « opérateurs actifs » counter of the TV page.
 OFFLINE_AFTER = timedelta(minutes=10)
 
@@ -222,14 +239,17 @@ def clean_display_options(view: dict) -> dict:
         raise ValueError("invalid_opacity")
     out_opacity = {}
     for key, default in DEFAULT_OPACITY.items():
-        v = opacity.get(key, default)
+        v = opacity.get(key, opacity.get(OPACITY_LEGACY.get(key, key), default))
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0.1 <= v <= 1:
             raise ValueError("invalid_opacity")
         out_opacity[key] = round(float(v), 2)
     messages = view.get("messages", True)
     if not isinstance(messages, bool):
         raise ValueError("invalid_messages")
-    return {"layers": out_layers, "opacity": out_opacity, "messages": messages}
+    sender = view.get("from") or ""
+    if not isinstance(sender, str) or len(sender) > 64:
+        raise ValueError("invalid_from")
+    return {"layers": out_layers, "opacity": out_opacity, "messages": messages, "from": sender.strip()}
 
 
 def display_options(view: dict | None) -> dict:
@@ -278,6 +298,7 @@ def apply_view(snap: dict, view: dict | None, now: datetime, *, weather: dict | 
         out["drawings"] = drawings if layers["drawings"] else []
     if bearings is not None:
         out["bearings"] = bearings if layers["bearings"] else []
+        out["zones"] = probable_zones(out["bearings"])
     if references is not None:
         out["references"] = [r for r in references
                              if (r.get("category") == "HIGH_POINT" and layers["highpoints"])
@@ -285,14 +306,41 @@ def apply_view(snap: dict, view: dict | None, now: datetime, *, weather: dict | 
     return out
 
 
-# Colours of the searches (bearings), stable for a given search name.
-SEARCH_COLORS = ("#ff4d5e", "#3dd6f5", "#ffb020", "#3ddc84", "#c77dff", "#ff8c1a", "#4d8dff", "#f06bc4")
+# Colours of the searches, the same as the application (`beaconColor` /
+# `searchColor` of lib/src/features/bearings/bearing_models.dart): fixed
+# beacon colours (406 MHz violet, 121,5 MHz red, exercise 121,375 MHz blue),
+# else a palette without violet, red or plain blue, stable from the name.
+BEACON_406, BEACON_1215, BEACON_EXERCISE = "#9B4DFF", "#E53935", "#1E88E5"
+SEARCH_COLORS = ("#3DD6F5", "#FFB020", "#4ADE80", "#FF7AB6", "#FFE066")
+_FREQ = re.compile(r"(\d{3})(?:[.,](\d+))?")
+
+
+def beacon_color(search: str) -> str | None:
+    for m in _FREQ.finditer(search or ""):
+        try:
+            f = float(f"{m.group(1)}.{m.group(2) or '0'}")
+        except ValueError:
+            continue
+        if 406 <= f < 407:
+            return BEACON_406
+        if abs(f - 121.375) < 0.001:
+            return BEACON_EXERCISE
+        if abs(f - 121.5) < 0.001:
+            return BEACON_1215
+    return None
 
 
 def search_color(search: str) -> str:
+    b = beacon_color(search)
+    if b is not None:
+        return b
     if not search:
         return SEARCH_COLORS[0]
-    return SEARCH_COLORS[int(hashlib.sha1(search.encode()).hexdigest(), 16) % len(SEARCH_COLORS)]
+    h = 0
+    units = search.encode("utf-16-le")        # Dart codeUnits are UTF-16
+    for i in range(0, len(units), 2):
+        h = (h * 31 + int.from_bytes(units[i:i + 2], "little")) & 0x7FFFFFFF
+    return SEARCH_COLORS[h % len(SEARCH_COLORS)]
 
 
 def tv_drawing(feature: dict) -> dict:
@@ -308,9 +356,82 @@ def tv_bearing(feature: dict) -> dict | None:
         return None
     search = b.get("search") or ""
     return {"id": feature.get("id"), "lat": points[0][0], "lon": points[0][1],
-            "azimuth_deg": b["azimuth_deg"], "length_m": b.get("length_m", 10_000),
+            "azimuth_deg": b["azimuth_deg"], "length_m": b.get("length_m") or 10_000,
+            "cone_deg": b.get("cone_deg") if b.get("cone_deg") is not None else 5,
             "search": search, "label": feature.get("label") or "", "exercise": bool(b.get("exercise")),
             "color": search_color(search)}
+
+
+# --- Probable zone and crossings (card « Écran TV, zone probable et cônes
+# absents », 30 Oct 2026): same rule as `crossing` / `probableZone` of the
+# application, computed by the server for the TV.
+
+EARTH_RADIUS_M = 6371008.8
+
+
+def destination(lat: float, lon: float, distance_m: float, bearing_deg: float) -> tuple[float, float]:
+    d, b = distance_m / EARTH_RADIUS_M, math.radians(bearing_deg)
+    p1, l1 = math.radians(lat), math.radians(lon)
+    p2 = math.asin(math.sin(p1) * math.cos(d) + math.cos(p1) * math.sin(d) * math.cos(b))
+    l2 = l1 + math.atan2(math.sin(b) * math.sin(d) * math.cos(p1), math.cos(d) - math.sin(p1) * math.sin(p2))
+    return math.degrees(p2), (math.degrees(l2) + 540) % 360 - 180
+
+
+def distance_m(a: tuple[float, float], b: tuple[float, float]) -> float:
+    dlat, dlon = math.radians(b[0] - a[0]), math.radians(b[1] - a[1])
+    h = math.sin(dlat / 2) ** 2 + math.cos(math.radians(a[0])) * math.cos(math.radians(b[0])) * math.sin(dlon / 2) ** 2
+    return 2 * EARTH_RADIUS_M * math.asin(min(1, math.sqrt(h)))
+
+
+def _end(b: dict) -> tuple[float, float]:
+    return destination(b["lat"], b["lon"], float(b["length_m"]), float(b["azimuth_deg"]))
+
+
+def crossing(a: dict, b: dict) -> tuple[float, float] | None:
+    """Intersection of two bearing segments, planar around them; None when
+    parallel or not crossing."""
+    k = math.cos((a["lat"] + b["lat"]) / 2 * math.pi / 180)
+
+    def xy(p):
+        return p[1] * k, p[0]
+    (x1, y1), (x2, y2) = xy((a["lat"], a["lon"])), xy(_end(a))
+    (x3, y3), (x4, y4) = xy((b["lat"], b["lon"])), xy(_end(b))
+    d = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3)
+    if abs(d) < 1e-12:
+        return None
+    t = ((x3 - x1) * (y4 - y3) - (y3 - y1) * (x4 - x3)) / d
+    u = ((x3 - x1) * (y2 - y1) - (y3 - y1) * (x2 - x1)) / d
+    if t < 0 or t > 1 or u < 0 or u > 1:
+        return None
+    return y1 + t * (y2 - y1), (x1 + t * (x2 - x1)) / k
+
+
+def format_distance(m: float) -> str:
+    """« 850 m », « 1,25 km », « 12,4 km » (formatDistance of the app)."""
+    if m < 1000:
+        return f"{round(m)} m"
+    return f"{m / 1000:.{2 if m < 10000 else 1}f} km".replace(".", ",")
+
+
+def probable_zones(bearings: list[dict]) -> list[dict]:
+    """Crossings of each search and the probable zone around them: centre of
+    the crossings, radius to the farthest one (at least 50 m)."""
+    groups: dict[str, list[dict]] = {}
+    for b in bearings:
+        groups.setdefault(b.get("search") or "", []).append(b)
+    out = []
+    for search, group in sorted(groups.items()):
+        pts = [c for i in range(len(group)) for j in range(i + 1, len(group))
+               if (c := crossing(group[i], group[j])) is not None]
+        zone = {"search": search, "color": search_color(search), "exercise": any(b.get("exercise") for b in group),
+                "bearings": len(group), "crossings": [[round(p[0], 6), round(p[1], 6)] for p in pts]}
+        if pts:
+            centre = (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+            radius = max(50.0, max(distance_m(centre, p) for p in pts))
+            zone.update(lat=round(centre[0], 6), lon=round(centre[1], 6), radius_m=round(radius, 1),
+                        label=f"±{format_distance(radius)} · {len(group)} relevés")
+        out.append(zone)
+    return out
 
 
 # --- Weather in the top bar -------------------------------------------------

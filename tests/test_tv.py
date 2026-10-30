@@ -85,7 +85,7 @@ def test_view_sent_by_a_phone_is_checked():
                        "tile_url": "https://data.geopf.fr/wmts/{z}/{x}/{y}", "attribution": "IGN"}, now=1)
     assert v == {"lat": 48.8, "lon": 2.1, "zoom": 14.33, "basemap": "ign",
                  "tile_url": "https://data.geopf.fr/wmts/{z}/{x}/{y}", "attribution": "IGN", "rev": 1000,
-                 "layers": tv.DEFAULT_LAYERS, "opacity": tv.DEFAULT_OPACITY, "messages": True}
+                 "layers": tv.DEFAULT_LAYERS, "opacity": tv.DEFAULT_OPACITY, "messages": True, "from": ""}
     assert tv.clean_view(None) is None
     import pytest
     for bad in ({"lat": 99, "lon": 2, "zoom": 10}, {"lat": 1, "lon": 2, "zoom": 30},
@@ -110,7 +110,7 @@ def test_view_layers_opacity_and_messages():
     v = tv.clean_view({**VIEW, "layers": {"aprs": False, "relays": True, "nope": True},
                        "opacity": {"draw": 0.5, "brg": 1}, "messages": False, "extra": 1}, now=1)
     assert v["layers"] == {**tv.DEFAULT_LAYERS, "aprs": False, "relays": True}
-    assert v["opacity"] == {"ops": 1.0, "draw": 0.5, "brg": 1.0, "ref": 1.0}
+    assert v["opacity"] == {"ops": 1.0, "aprs": 1.0, "draw": 0.5, "brg": 1.0, "high": 1.0, "relay": 1.0}
     assert v["messages"] is False and "extra" not in v
     d = tv.clean_view(VIEW, now=1)
     assert d["layers"] == {"operators": True, "aprs": True, "offline": True, "drawings": True,
@@ -221,7 +221,7 @@ def test_weather_cache_expires_after_ten_minutes():
 
 def test_tv_page_draws_the_layers_with_escaped_texts():
     for needle in ("drawFeatures", "drawBearings", "drawRefs", "EXERCICE", "msgBox", 'id="wx"',
-                   "esc(f.label)", "esc(name)", "esc(r.callsign||r.name)"):
+                   "esc(f.label)", "esc(z.label)", "esc(r.callsign||r.name)"):
         assert needle in api._TV
 
 
@@ -332,3 +332,113 @@ def test_approve_records_the_owner():
     s = tv.Store()
     p = s.new(now=1000)
     assert s.approve(p.code, "evt", now=1001, approved_by="op@x.fr").approved_by == "op@x.fr"
+
+
+# --- Lot 4, TV screen (30 Oct 2026) ------------------------------------------
+
+def test_opacity_per_layer_and_former_format():
+    v = tv.clean_view({**VIEW, "opacity": {"ops": 0.8, "aprs": 0.4, "high": 0.3, "relay": 0.6, "brg": 0.5}}, now=1)
+    assert v["opacity"] == {"ops": 0.8, "aprs": 0.4, "draw": 1.0, "brg": 0.5, "high": 0.3, "relay": 0.6}
+    old = tv.clean_view({**VIEW, "opacity": {"ops": 0.7, "ref": 0.2}}, now=1)
+    assert old["opacity"]["aprs"] == 0.7 and old["opacity"]["high"] == 0.2 and old["opacity"]["relay"] == 0.2
+    with pytest.raises(ValueError):
+        tv.clean_view({**VIEW, "opacity": {"aprs": 0}})
+
+
+def test_view_names_the_sender():
+    assert tv.clean_view({**VIEW, "from": " PCO-Web "}, now=1)["from"] == "PCO-Web"
+    for bad in (1, "x" * 65):
+        with pytest.raises(ValueError):
+            tv.clean_view({**VIEW, "from": bad})
+
+
+def test_search_colours_as_the_application():
+    assert tv.search_color("406,028 MHz · Balise") == "#9B4DFF"
+    assert tv.search_color("121,500 MHz · Détresse") == "#E53935"
+    assert tv.search_color("121,375 MHz · Balise d'exercice") == "#1E88E5"
+    assert tv.search_color("") == tv.SEARCH_COLORS[0]
+    # Same hash as Dart (h*31 + code unit): « ab » = 97*31+98 = 3105, 3105 % 5 = 0.
+    assert tv.search_color("ab") == tv.SEARCH_COLORS[3105 % 5]
+
+
+def _b(lat, lon, az, search="S", **kw):
+    return {"lat": lat, "lon": lon, "azimuth_deg": az, "length_m": 10000, "search": search, **kw}
+
+
+def test_probable_zone_as_the_application():
+    # Three bearings towards ≈ (48.80, 2.10).
+    bs = [_b(48.75, 2.10, 0), _b(48.80, 2.03, 90), _b(48.75, 2.04, 38, exercise=True)]
+    [z] = tv.probable_zones(bs)
+    assert z["bearings"] == 3 and len(z["crossings"]) == 3 and z["exercise"] is True
+    assert abs(z["lat"] - 48.80) < 0.01 and abs(z["lon"] - 2.10) < 0.01
+    assert z["radius_m"] >= 50 and z["label"].endswith("· 3 relevés") and z["label"].startswith("±")
+    c = tv.crossing(bs[0], bs[1])
+    assert abs(c[0] - 48.80) < 0.002 and abs(c[1] - 2.10) < 0.001
+    # Parallel or apart: no crossing, no zone.
+    [z] = tv.probable_zones([_b(48.7, 2.1, 0), _b(48.7, 2.2, 0)])
+    assert z["crossings"] == [] and "lat" not in z
+    assert tv.format_distance(426.2) == "426 m" and tv.format_distance(1250) == "1,25 km"
+
+
+def test_zones_follow_the_bearings_layer():
+    snap = {"positions": [], "messages": []}
+    bs = [_b(48.75, 2.10, 0), _b(48.80, 2.03, 90)]
+    out = tv.apply_view(snap, None, NOW, bearings=bs)
+    assert out["zones"][0]["lat"] is not None
+    off = tv.clean_view({**VIEW, "layers": {"bearings": False}})
+    assert tv.apply_view(snap, off, NOW, bearings=bs)["zones"] == []
+
+
+def test_tv_bearing_has_its_cone():
+    f = {"id": "b", "points": [[48.8, 2.1]], "bearing": {"azimuth_deg": 10, "cone_deg": 3, "search": "121,375"}}
+    b = tv.tv_bearing(f)
+    assert b["cone_deg"] == 3 and b["color"] == "#1E88E5"
+    assert tv.tv_bearing({**f, "bearing": {"azimuth_deg": 10}})["cone_deg"] == 5
+
+
+def test_tv_page_lot4():
+    t = api._TV
+    assert "Outils › Afficher sur une TV" in t and "Paramètres › Affichage" not in t
+    assert "padding:0 20px 0 10px" in t
+    assert "blab" not in t                         # no label at the end of the bearings
+    for needle in ('id="legend"', "esc(k||'Sans signal')", "esc(z.label)", "Zone probable", "'Vue de '+v.from",
+                   "textContent=v.from", "o.aprs", "o.high", "o.relay", "cone_deg"):
+        assert needle in t
+
+
+def test_nearby_codes_same_public_address():
+    s = tv.Store()
+    a = s.new(now=1000, ip="1.2.3.4")
+    s.new(now=1000, ip="5.6.7.8")
+    assert [p.code for p in s.nearby("1.2.3.4", now=1001)] == [a.code]
+    assert s.nearby(None, now=1001) == []
+    s.approve(a.code, "e", now=1002)
+    assert s.nearby("1.2.3.4", now=1003) == []      # approved: no longer offered
+    b = s.new(now=1000, ip="9.9.9.9")
+    assert s.nearby("9.9.9.9", now=1000 + tv.CODE_TTL_S + 1) == [] and b
+
+
+def test_nearby_route_pco_only_and_messages_per_screen(sos_client, monkeypatch):
+    c, who, db = sos_client
+    monkeypatch.setattr(tv, "store", tv.Store())
+    h = {"cf-connecting-ip": "81.1.2.3"}
+    code = c.post("/api/v0.1/tv/pair", headers=h).json()["code"]
+    assert tv.store.pairings[next(iter(tv.store.pairings))].ip == "81.1.2.3"
+    assert c.get("/api/v0.1/tv/nearby", headers=h).json() == []          # no checked email
+    who["email"], who["roles"] = "op@x.fr", []
+    assert c.get("/api/v0.1/tv/nearby", headers=h).json() == []          # not a PCO
+    who["roles"] = ["pco"]
+    [n] = c.get("/api/v0.1/tv/nearby", headers=h).json()
+    assert n["code"] == code and n["expires_in"] > 0
+    assert c.get("/api/v0.1/tv/nearby", headers={"cf-connecting-ip": "90.0.0.1"}).json() == []
+    # Messages column of one screen, at once, without a view.
+    url = "/api/v0.1/events/e1/displays/d1/messages"
+    assert c.put(url, json={"messages": False}).json() == {"messages": False}
+    [d] = c.get("/api/v0.1/events/e1/displays").json()
+    assert d["messages"] is False and d["revoked"] is False and d["view_from"] is None
+    assert c.put("/api/v0.1/events/e1/displays/zz/messages", json={"messages": True}).status_code == 404
+    v = c.put("/api/v0.1/events/e1/displays/d1/view", json={"view": {**VIEW, "from": "PCO-Web", "messages": True}}).json()
+    assert v["view"]["from"] == "PCO-Web"
+    [d] = c.get("/api/v0.1/events/e1/displays").json()
+    assert d["messages"] is True and d["view_from"] == "PCO-Web"
+    assert c.put("/api/v0.1/events/e1/displays/d1/view", json={"view": None}).json() == {"view": None}
