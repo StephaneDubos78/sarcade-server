@@ -187,3 +187,36 @@ def test_group_names_unique():
     with pytest.raises(HTTPException):
         aprs_api.update_group(other["id"], aprs_api.GroupIn(actor_id="A", name="Adrasec 78", callsigns=[]), db, None)
     assert aprs_api.update_group(g["id"], aprs_api.GroupIn(actor_id="A", name="ADRASEC 78", callsigns=[]), db, None)["name"] == "ADRASEC 78"
+
+
+def test_station_classified_by_hand_shared_by_the_event():
+    """« Équipes, stations APRS fixes », D (30 Oct 2026): fixed / mobile
+    forced in the sheet, « auto » gives the choice back to the application."""
+    from fastapi import HTTPException
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from sarcade.api import aprs as aprs_api
+    from sarcade.db.base import Base
+    from sarcade.db.models import AprsStationClassRow, EventRow
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine, tables=[EventRow.__table__, AprsStationClassRow.__table__])
+    db = sessionmaker(bind=engine)()
+    db.add(EventRow(id="e1", name="Exercice", kind="exercise", created_at=datetime.now(UTC)))
+    db.commit()
+    put = lambda dev, kind: aprs_api.set_station_class(db, "e1", dev, aprs_api.StationClassIn(actor_id="TEL-01", kind=kind))
+    assert aprs_api.station_classes("e1", db) == {"classes": {}}
+    put("aprs:F6KRK-10", "mobile")
+    put("aprs:F6KRK-10", "fixed")
+    put("aprs:F4JPO-2", "mobile")
+    assert aprs_api.station_classes("e1", db) == {"classes": {"aprs:F6KRK-10": "fixed", "aprs:F4JPO-2": "mobile"}}
+    assert put("aprs:F4JPO-2", "auto")["kind"] == "auto"
+    put("aprs:NONE", "auto")
+    assert aprs_api.station_classes("e1", db) == {"classes": {"aprs:F6KRK-10": "fixed"}}
+    with pytest.raises(HTTPException) as e:
+        aprs_api.station_classes("other", db)
+    assert e.value.status_code == 404
+    with pytest.raises(Exception):
+        aprs_api.StationClassIn(actor_id="A", kind="relay")

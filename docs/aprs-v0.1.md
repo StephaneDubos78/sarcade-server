@@ -30,6 +30,11 @@ Un opérateur déclare son indicatif dans le heartbeat (`callsign`) : les positi
 ## Émission radio locale (désactivée par défaut)
 Réglage `aprs_tx_rf` du PCO, consentement de l'opérateur (`aprs_tx_consent` dans le heartbeat), indicatif de l'ADRASEC (`SARCADE_APRS_CALLSIGN`) et liaison radio active : la position de l'opérateur est émise **en radio seulement**, comme objet portant son indicatif, sous l'indicatif de l'ADRASEC, au plus toutes les 2 minutes. Jamais vers APRS-IS.
 
+## Stations fixes (iGates, relais)
+L'application classe seule une station APRS en fixe (symbole iGate, relais, maison, météo ; SSID -10 ou -1 à -3 ; pas de déplacement de plus de 50 m en plusieurs heures). Le classement forcé à la main dans la fiche est partagé par l'événement (décision du 30 octobre 2026, migration 0025) :
+- `GET /api/v0.1/events/{id}/aprs/classes` → `{"classes": {"aprs:F6KRK-10": "fixed", …}}` ;
+- `PUT /api/v0.1/events/{id}/aprs/classes/{device_id}` avec `{"actor_id", "kind": "fixed" | "mobile" | "auto"}` (`auto` retire le choix) ; ouvert à tous les participants ; diffusé en temps réel (`aprs.class.updated`).
+
 ## État
 `GET /api/v0.1/aprs/status` : état des deux liaisons, filtre APRS-IS courant, paquets reçus, positions enregistrées.
 

@@ -33,7 +33,8 @@ IP = {"cf-connecting-ip": "203.0.113.7"}
 
 p = c.post(f"{API}/tv/pair", headers=IP).json()
 check(len(p["code"]) == 6, "the TV gets a code")
-check(c.get(f"{API}/tv/nearby", headers=IP).json() == [], "same network: nothing offered without a checked PCO email")
+check([n["code"] for n in c.get(f"{API}/tv/nearby", headers=IP).json()] == [p["code"]], "same network: code offered to every participant")
+check(c.get(f"{API}/tv/nearby", headers={"cf-connecting-ip": "198.51.100.9"}).json() == [], "other network: nothing offered")
 check(c.post(f"{API}/tv/approve", json={"code": p["code"], "event_id": event}).status_code == 200, "code approved")
 token = c.get(f"{API}/tv/pair/{p['pair_id']}").json()["token"]
 TV = {"authorization": f"Display {token}"}

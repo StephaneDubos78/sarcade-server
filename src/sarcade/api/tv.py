@@ -99,14 +99,13 @@ def pair_status(pair_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/api/v0.1/tv/nearby")
-def nearby(request: Request, db: Session = Depends(get_db)):
+def nearby(request: Request):
     """Codes shown by TVs behind the same public address as the caller
-    (« validation automatique depuis le même réseau », 30 Oct 2026): only
-    for a PCO or an administrator (roles of the server, checked email);
-    nothing is approved here, the operator confirms the code shown."""
-    email = checked_email(request)
-    if email is None or "pco" not in roles.roles_of(db, email):
-        return []
+    (« validation automatique depuis le même réseau », 30 Oct 2026): for
+    every participant of the event (decision of the porteur, 30 Oct 2026,
+    13 h 19; formerly PCO and administrators only), like approval itself;
+    the TV address (tv.*) does not serve this route. Nothing is approved
+    here, the operator confirms the code shown."""
     return [{"code": p.code, "name": p.name, "expires_in": max(0, int(tv.CODE_TTL_S - (time.time() - p.created)))}
             for p in tv.store.nearby(_client(request))]
 
