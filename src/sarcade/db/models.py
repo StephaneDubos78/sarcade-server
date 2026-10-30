@@ -280,6 +280,18 @@ class AprsGroupRow(Base):
     updated_by: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+class AprsStationClassRow(Base):
+    """APRS station classified by hand as fixed (iGate, relay) or mobile in
+    an event (« Équipes, stations APRS fixes », D, 30 Oct 2026); without a
+    row the application decides from the symbol, SSID and movement."""
+    __tablename__ = "aprs_station_classes"
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), primary_key=True)
+    device_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class WeatherCacheRow(Base):
     """Last forecast or vigilance fetched, served without Internet."""
     __tablename__ = "weather_cache"

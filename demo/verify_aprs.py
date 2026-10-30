@@ -68,6 +68,15 @@ devices = {d["device_id"]: d for d in c.get(f"{E}/devices").json()}
 check(devices["TEL-01"]["callsign"] == "F4JPO-9" and devices["TEL-01"]["last_position_at"],
       "the device shows its callsign and last position")
 
+# Fixed or mobile forced by hand, shared by the event (30 Oct 2026).
+r = c.put(f"{E}/aprs/classes/aprs:F5XYZ", json={"actor_id": "TEL-01", "kind": "fixed"})
+check(r.status_code == 200, "a participant classifies a station as fixed")
+check(c.get(f"{E}/aprs/classes").json()["classes"] == {"aprs:F5XYZ": "fixed"}, "classification shared by the event")
+c.put(f"{E}/aprs/classes/aprs:F5XYZ", json={"actor_id": "TEL-01", "kind": "auto"})
+check(c.get(f"{E}/aprs/classes").json()["classes"] == {}, "« auto » gives the choice back to the application")
+check(c.put(f"{E}/aprs/classes/aprs:F5XYZ", json={"actor_id": "TEL-01", "kind": "relay"}).status_code == 422,
+      "unknown classification refused")
+
 c.post(f"{E}/close", json={"actor_id": "PCO"})
 check(push("rf", f"F4JPO-9>APRS:!4851.00N/00211.00E>{tag}x")["stored"] == 0, "closed events stop following APRS")
 

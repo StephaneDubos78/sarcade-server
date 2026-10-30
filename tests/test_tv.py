@@ -418,18 +418,20 @@ def test_nearby_codes_same_public_address():
     assert s.nearby("9.9.9.9", now=1000 + tv.CODE_TTL_S + 1) == [] and b
 
 
-def test_nearby_route_pco_only_and_messages_per_screen(sos_client, monkeypatch):
+def test_nearby_route_every_participant_and_messages_per_screen(sos_client, monkeypatch):
     c, who, db = sos_client
     monkeypatch.setattr(tv, "store", tv.Store())
     h = {"cf-connecting-ip": "81.1.2.3"}
     code = c.post("/api/v0.1/tv/pair", headers=h).json()["code"]
     assert tv.store.pairings[next(iter(tv.store.pairings))].ip == "81.1.2.3"
-    assert c.get("/api/v0.1/tv/nearby", headers=h).json() == []          # no checked email
+    # Every participant (30 Oct 2026, 13 h 19): local network, operator, PCO.
+    assert [n["code"] for n in c.get("/api/v0.1/tv/nearby", headers=h).json()] == [code]
     who["email"], who["roles"] = "op@x.fr", []
-    assert c.get("/api/v0.1/tv/nearby", headers=h).json() == []          # not a PCO
+    assert [n["code"] for n in c.get("/api/v0.1/tv/nearby", headers=h).json()] == [code]
     who["roles"] = ["pco"]
     [n] = c.get("/api/v0.1/tv/nearby", headers=h).json()
     assert n["code"] == code and n["expires_in"] > 0
+    assert not api.tv_host_allows("/api/v0.1/tv/nearby")                # never on the TV address
     assert c.get("/api/v0.1/tv/nearby", headers={"cf-connecting-ip": "90.0.0.1"}).json() == []
     # Messages column of one screen, at once, without a view.
     url = "/api/v0.1/events/e1/displays/d1/messages"
