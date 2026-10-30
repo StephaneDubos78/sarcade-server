@@ -2,7 +2,8 @@
 public address noted, codes of the same network offered to PCO only (none
 without a checked email), messages column of one screen at once, view with
 the opacity per layer and its sender, probable zone and crossings computed
-by the server, colours of the beacons, default view.
+by the server, colours of the beacons, default view; lot 7: name of each
+screen, « Identifier », day / night mode pushed with the view.
 
 Usage: SARCADE_URL=http://localhost:8000 python demo/verify_tv.py
 """
@@ -75,4 +76,25 @@ check(c.get(f"{API}/tv/state", headers=TV).json()["zones"] == [], "zone follows 
 check(c.put(f"{E}/displays/{d['id']}/view", json={"view": None}).json() == {"view": None}, "back to the default view")
 page = c.get(f"{BASE}/tv").text
 check("Outils › Afficher sur une TV" in page and 'id="legend"' in page, "TV page: new instructions and legend")
-print("TV lot 4 verified")
+
+# Lot 7 (30 Oct 2026): name of each screen, « Identifier », day / night mode.
+q = c.post(f"{API}/tv/pair", json={"name": "TV Samsung · 1920×1080"}).json()
+check(c.get(f"{API}/tv/code/{q['code']}").json()["name"] == "TV Samsung · 1920×1080", "default name of the TV proposed")
+check(c.post(f"{API}/tv/approve", json={"code": q["code"], "event_id": event, "name": "Salle PCO"}).status_code == 200,
+      "name chosen at pairing")
+tok2 = c.get(f"{API}/tv/pair/{q['pair_id']}").json()["token"]
+TV2 = {"authorization": f"Display {tok2}"}
+s = c.get(f"{API}/tv/state", headers=TV2).json()
+check(s["name"] == "Salle PCO" and s["identify"] is None and s["options"]["theme"] == "auto", "TV knows its name, auto mode")
+d2 = next(x for x in c.get(f"{E}/displays").json() if x["code"] == q["code"])
+check(d2["name"] == "Salle PCO" and d2["last_seen"], "list: name and last activity")
+check(c.put(f"{E}/displays/{d2['id']}/name", json={"name": "Mur d'images"}).json() == {"name": "Mur d'images"}, "renamed")
+check(c.post(f"{E}/displays/{d2['id']}/identify").status_code == 200, "identify asked")
+check(c.get(f"{API}/tv/state", headers=TV2).json()["identify"]["name"] == "Mur d'images", "TV shows its name")
+c.put(f"{E}/displays/{d2['id']}/view", json={"view": {"lat": 48.8, "lon": 2.1, "zoom": 12, "theme": "day"}})
+check(c.get(f"{API}/tv/state", headers=TV2).json()["night"] is False, "day mode pushed with the view")
+c.put(f"{E}/displays/{d2['id']}/view", json={"view": {"lat": 48.8, "lon": 2.1, "zoom": 12, "theme": "night"}})
+check(c.get(f"{API}/tv/state", headers=TV2).json()["night"] is True, "night mode pushed with the view")
+check(c.put(f"{E}/displays/{d2['id']}/view", json={"view": {"lat": 48.8, "lon": 2.1, "zoom": 12, "theme": "x"}}).status_code == 422,
+      "unknown mode refused")
+print("TV lot 7 verified")

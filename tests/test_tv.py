@@ -85,7 +85,7 @@ def test_view_sent_by_a_phone_is_checked():
                        "tile_url": "https://data.geopf.fr/wmts/{z}/{x}/{y}", "attribution": "IGN"}, now=1)
     assert v == {"lat": 48.8, "lon": 2.1, "zoom": 14.33, "basemap": "ign",
                  "tile_url": "https://data.geopf.fr/wmts/{z}/{x}/{y}", "attribution": "IGN", "rev": 1000,
-                 "layers": tv.DEFAULT_LAYERS, "opacity": tv.DEFAULT_OPACITY, "messages": True, "from": ""}
+                 "layers": tv.DEFAULT_LAYERS, "opacity": tv.DEFAULT_OPACITY, "messages": True, "from": "", "theme": "auto"}
     assert tv.clean_view(None) is None
     import pytest
     for bad in ({"lat": 99, "lon": 2, "zoom": 10}, {"lat": 1, "lon": 2, "zoom": 30},
@@ -442,3 +442,74 @@ def test_nearby_route_pco_only_and_messages_per_screen(sos_client, monkeypatch):
     [d] = c.get("/api/v0.1/events/e1/displays").json()
     assert d["messages"] is True and d["view_from"] == "PCO-Web"
     assert c.put("/api/v0.1/events/e1/displays/d1/view", json={"view": None}).json() == {"view": None}
+
+
+# --- Lot 7, TV screen (30 Oct 2026) ------------------------------------------
+
+def test_screen_name_cleaned():
+    assert tv.clean_name("  TV  Samsung\n· 1920×1080 ") == "TV Samsung · 1920×1080"
+    assert tv.clean_name(None) == "" and tv.clean_name(3) == ""
+    assert len(tv.clean_name("x" * 300)) == tv.NAME_MAX
+
+
+def test_theme_of_the_view_and_auto_mode():
+    assert tv.clean_view(VIEW, now=1)["theme"] == "auto"
+    assert tv.clean_view({**VIEW, "theme": "day"}, now=1)["theme"] == "day"
+    with pytest.raises(ValueError):
+        tv.clean_view({**VIEW, "theme": "blue"})
+    w = {"sunrise": "2026-10-30T06:20:00+00:00", "sunset": "2026-10-30T16:30:00+00:00"}
+    noon, evening = datetime(2026, 10, 30, 12, tzinfo=UTC), datetime(2026, 10, 30, 18, tzinfo=UTC)
+    assert not tv.theme_night("auto", w, noon) and tv.theme_night("auto", w, evening)
+    assert tv.theme_night("auto", None, noon)                    # no sun times: former dark look
+    assert not tv.theme_night("day", w, evening) and tv.theme_night("night", w, noon)
+
+
+def test_tv_page_lot7():
+    t = api._TV
+    for needle in ("#app.day{", "#app.nomsg{grid-template-columns:1fr}", "invalidateSize", ".night .leaflet-tile-pane",
+                   "function tvName()", "name:tvName()", "id=\"ident\"", "$('ident').textContent=i.name", "TV Samsung"):
+        assert needle in t
+    assert "$('msgBox').style.display" not in t
+    assert "#legend{display:none;position:absolute;left:10px;bottom:10px" in t
+    a = api._APPROVE
+    assert 'id="n"' in a and "/api/v0.1/tv/code/" in a and "name:document.getElementById('n').value" in a
+
+
+def test_name_rename_identify_and_theme_routes(sos_client, monkeypatch):
+    c, who, db = sos_client
+    monkeypatch.setattr(tv, "store", tv.Store())
+    monkeypatch.setattr(tv, "seen", {})
+    p = c.post("/api/v0.1/tv/pair", json={"name": " TV <b>LG</b> · 3840×2160 "}).json()
+    assert c.post("/api/v0.1/tv/pair").status_code == 200          # former TV page, no body
+    assert c.get(f"/api/v0.1/tv/code/{p['code'].lower()}").json()["name"] == "TV <b>LG</b> · 3840×2160"
+    assert c.get("/api/v0.1/tv/code/ZZZZZZ").status_code == 404
+    assert c.post("/api/v0.1/tv/approve", json={"code": p["code"], "event_id": "e1", "name": "Salle PCO"}).status_code == 200
+    tok = c.get(f"/api/v0.1/tv/pair/{p['pair_id']}").json()["token"]
+    d = next(x for x in c.get("/api/v0.1/events/e1/displays").json() if x["code"] == p["code"])
+    assert d["name"] == "Salle PCO" and d["last_seen"] is None
+    url = f"/api/v0.1/events/e1/displays/{d['id']}"
+    assert tok
+    disp = lambda: next(x for x in api._displays(db) if x["id"] == d["id"])  # noqa: E731
+    opts = lambda: {"options": tv.display_options(disp().get("view")), "weather": None}  # noqa: E731
+    s = api._screen(disp(), opts())
+    assert s["name"] == "Salle PCO" and s["identify"] is None and s["night"] is True and opts()["options"]["theme"] == "auto"
+    tv.seen[d["id"]] = 1234.0
+    d = next(x for x in c.get("/api/v0.1/events/e1/displays").json() if x["id"] == d["id"])
+    assert d["last_seen"] == 1234.0
+    assert c.put(url + "/name", json={"name": "  Mur   d'images "}).json() == {"name": "Mur d'images"}
+    assert c.put(url + "/name", json={"name": "   "}).status_code == 422
+    assert c.put("/api/v0.1/events/e1/displays/zz/name", json={"name": "x"}).status_code == 404
+    assert c.post(url + "/identify").json() == {"identify": True, "seconds": 5}
+    s = api._screen(disp(), opts())
+    assert api._screen(disp(), opts(), now=disp()["identify"] + 20)["identify"] is None
+    assert s["identify"]["name"] == "Mur d'images" and s["identify"]["seconds"] == 5
+    assert c.post("/api/v0.1/events/e1/displays/zz/identify").status_code == 404
+    c.put(url + "/view", json={"view": {**VIEW, "theme": "day"}})
+    assert api._screen(disp(), opts())["night"] is False
+    c.put(url + "/view", json={"view": {**VIEW, "theme": "night"}})
+    assert api._screen(disp(), opts())["night"] is True
+    # Pairing without a chosen name keeps the default name of the TV.
+    q = c.post("/api/v0.1/tv/pair", json={"name": "TV Sony · 1920×1080"}).json()
+    c.post("/api/v0.1/tv/approve", json={"code": q["code"], "event_id": "e1"})
+    c.get(f"/api/v0.1/tv/pair/{q['pair_id']}")
+    assert any(x["name"] == "TV Sony · 1920×1080" for x in c.get("/api/v0.1/events/e1/displays").json())

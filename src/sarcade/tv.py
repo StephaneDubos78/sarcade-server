@@ -31,6 +31,9 @@ class Pairing:
     # Public address of the TV (« validation automatique depuis le même
     # réseau », 30 Oct 2026): Cloudflare header, else the client address.
     ip: str | None = None
+    # Default name sent by the TV page (brand or system of its browser and
+    # resolution, « Écrans TV, identifier chaque écran », 30 Oct 2026).
+    name: str = ""
 
 
 @dataclass
@@ -55,7 +58,7 @@ class Store:
                 self.pairings.pop(pid, None)
                 self.by_code.pop(p.code, None)
 
-    def new(self, now: float | None = None, ip: str | None = None) -> Pairing:
+    def new(self, now: float | None = None, ip: str | None = None, name: str = "") -> Pairing:
         now = now or time.time()
         self._purge(now)
         if len(self.pairings) >= MAX_PENDING:
@@ -63,7 +66,7 @@ class Store:
         code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(6))
         while code in self.by_code:
             code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(6))
-        p = Pairing(pair_id=secrets.token_urlsafe(18), code=code, created=now, ip=ip)
+        p = Pairing(pair_id=secrets.token_urlsafe(18), code=code, created=now, ip=ip, name=name)
         self.pairings[p.pair_id] = p
         self.by_code[code] = p.pair_id
         return p
@@ -78,6 +81,13 @@ class Store:
             return None
         p.event_id, p.token, p.approved_by = event_id, secrets.token_urlsafe(32), approved_by
         return p
+
+    def pending(self, code: str, now: float | None = None) -> Pairing | None:
+        """Code still waiting (default name shown before approval)."""
+        self._purge(now or time.time())
+        pid = self.by_code.get(code.strip().upper().replace(" ", ""))
+        p = self.pairings.get(pid) if pid else None
+        return p if p is not None and p.token is None else None
 
     def nearby(self, ip: str | None, now: float | None = None) -> list[Pairing]:
         """Codes still waiting, shown by a TV behind the same public address
@@ -94,6 +104,45 @@ class Store:
 
 
 store = Store()
+
+
+# --- Name of a screen (« Écrans TV, identifier chaque écran », 30 Oct 2026) --
+
+NAME_MAX = 60
+IDENTIFY_S = 5
+# Last request of each screen (epoch seconds, in memory: « dernière
+# activité » of the list; lost on a restart of the server).
+seen: dict[str, float] = {}
+
+
+def clean_name(value) -> str:
+    """Name typed or proposed: text, control characters removed, spaces
+    folded, at most NAME_MAX characters (escaped wherever it is shown)."""
+    if not isinstance(value, str):
+        return ""
+    text = "".join(ch if ch.isprintable() else " " for ch in value)
+    return " ".join(text.split())[:NAME_MAX]
+
+
+# --- Day / night mode of the TV page (« Écran TV, mode jour / nuit ») -------
+# Pushed by « Envoyer ma vue » (setting Paramètres › Affichage of the device
+# that sends); « auto » before any send: night between sunset and sunrise.
+
+THEMES = ("day", "night", "auto")
+
+
+def theme_night(theme: str | None, weather: dict | None, now: datetime) -> bool:
+    """Night or not for the page. Auto without sun times: night (the
+    former look of the TV)."""
+    if theme == "day":
+        return False
+    if theme == "night":
+        return True
+    rise, sset = _time((weather or {}).get("sunrise")), _time((weather or {}).get("sunset"))
+    if rise is None or sset is None:
+        return True
+    # Times of the nearest day: before its sunrise or after its sunset.
+    return not rise <= now < sset
 
 
 def token_hash(token: str) -> str:
@@ -249,7 +298,10 @@ def clean_display_options(view: dict) -> dict:
     sender = view.get("from") or ""
     if not isinstance(sender, str) or len(sender) > 64:
         raise ValueError("invalid_from")
-    return {"layers": out_layers, "opacity": out_opacity, "messages": messages, "from": sender.strip()}
+    theme = view.get("theme") or "auto"
+    if theme not in THEMES:
+        raise ValueError("invalid_theme")
+    return {"layers": out_layers, "opacity": out_opacity, "messages": messages, "from": sender.strip(), "theme": theme}
 
 
 def display_options(view: dict | None) -> dict:

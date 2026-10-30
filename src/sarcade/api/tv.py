@@ -61,12 +61,18 @@ def _client(request: Request) -> str:
     return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "?")
 
 
+class PairIn(BaseModel):
+    """Default name of the screen, from its browser (« TV Samsung ·
+    1920×1080 »); optional (former TV pages send nothing)."""
+    name: str | None = Field(default=None, max_length=200)
+
+
 @router.post("/api/v0.1/tv/pair")
-def pair(request: Request):
+def pair(request: Request, body: PairIn | None = None):
     if not tv.store.allowed(_client(request)):
         raise HTTPException(status_code=429, detail="too_many_requests")
     try:
-        p = tv.store.new(ip=_client(request))
+        p = tv.store.new(ip=_client(request), name=tv.clean_name(body.name if body else ""))
     except OverflowError:
         raise HTTPException(status_code=503, detail="busy")
     return {"pair_id": p.pair_id, "code": p.code, "expires_in": tv.CODE_TTL_S}
@@ -86,7 +92,7 @@ def pair_status(pair_id: str, db: Session = Depends(get_db)):
     displays = [d for d in _displays(db) if d.get("expires", 0) > now - 7 * 24 * 3600]
     displays.append({"id": str(uuid.uuid4()), "hash": tv.token_hash(token), "event_id": event_id,
                      "created": now, "expires": now + tv.TOKEN_TTL_S, "revoked": False, "code": p.code,
-                     "owner": p.approved_by})
+                     "owner": p.approved_by, "name": p.name})
     set_value(db, KEY, displays)
     db.commit()
     return {"status": "approved", "token": token, "event_id": event_id}
@@ -101,13 +107,25 @@ def nearby(request: Request, db: Session = Depends(get_db)):
     email = checked_email(request)
     if email is None or "pco" not in roles.roles_of(db, email):
         return []
-    return [{"code": p.code, "expires_in": max(0, int(tv.CODE_TTL_S - (time.time() - p.created)))}
+    return [{"code": p.code, "name": p.name, "expires_in": max(0, int(tv.CODE_TTL_S - (time.time() - p.created)))}
             for p in tv.store.nearby(_client(request))]
+
+
+@router.get("/api/v0.1/tv/code/{code}")
+def pending_code(code: str):
+    """Default name of a TV still showing this code, proposed in the
+    application before approval (« nom choisi à l'appairage »)."""
+    p = tv.store.pending(code[:12])
+    if p is None:
+        raise HTTPException(status_code=404, detail="unknown_code")
+    return {"code": p.code, "name": p.name}
 
 
 class ApproveIn(BaseModel):
     code: str = Field(min_length=4, max_length=12)
     event_id: str = Field(min_length=1, max_length=64)
+    # Name chosen at pairing (the default name of the TV when omitted).
+    name: str | None = Field(default=None, max_length=200)
 
 
 @router.post("/api/v0.1/tv/approve")
@@ -119,10 +137,16 @@ def approve(body: ApproveIn, request: Request, db: Session = Depends(get_db)):
     p = tv.store.approve(body.code, body.event_id, approved_by=checked_email(request))
     if p is None:
         raise HTTPException(status_code=404, detail="unknown_code")
+    p.name = tv.clean_name(body.name) or p.name
     db.add(LogbookRow(event_id=body.event_id, kind="display", object_id=None, actor_id=actor,
-                      summary=f"Écran d'affichage appairé (code {p.code})", time=datetime.now(UTC)))
+                      summary=f"Écran d'affichage appairé : {_label(p.name, p.code)}", time=datetime.now(UTC)))
     db.commit()
     return {"approved": True}
+
+
+def _label(name: str | None, code: str | None) -> str:
+    """« Salle PCO (code ABC123) », or the code alone, for the logbook."""
+    return f"{name} (code {code})" if name else f"code {code}"
 
 
 def _display(request: Request, db: Session) -> dict:
@@ -193,6 +217,7 @@ def state(request: Request, fr: str | None = Query(None, max_length=32), rr: str
     """``fr`` / ``rr``: revisions of the drawings and reference sites the TV
     already has; unchanged layers are not sent again."""
     d = _display(request, db)
+    tv.seen[d["id"]] = time.time()
     event = db.get(EventRow, d["event_id"])
     if event is None:
         raise HTTPException(status_code=404, detail="event_not_found")
@@ -216,7 +241,19 @@ def state(request: Request, fr: str | None = Query(None, max_length=32), rr: str
     # « Messages : afficher / masquer » of this screen, applied at once.
     snap["options"] = {**snap["options"], "messages": d.get("messages", snap["options"]["messages"])}
     snap["default_base"] = _default_base(db, event)
+    snap.update(_screen(d, snap))
     return snap
+
+
+def _screen(d: dict, snap: dict, now: float | None = None) -> dict:
+    """Day / night of the page (pushed with the view, « auto » before any
+    send), name of the screen and the « Identifier » request."""
+    now = now if now is not None else time.time()
+    ident = d.get("identify") or 0
+    return {"night": tv.theme_night(snap["options"].get("theme"), snap.get("weather"), datetime.fromtimestamp(now, UTC)),
+            "name": d.get("name") or "",
+            "identify": ({"id": str(ident), "name": d.get("name") or d.get("code") or "", "seconds": tv.IDENTIFY_S}
+                         if now - ident < IDENTIFY_WINDOW_S else None)}
 
 
 def _default_base(db: Session, event: EventRow) -> dict | None:
@@ -230,7 +267,7 @@ def _default_base(db: Session, event: EventRow) -> dict | None:
     if not (url.startswith("https://") and all(t in url for t in ("{z}", "{x}", "{y}"))
             and not any(ch in url for ch in "\"'<> ")):
         return None
-    return {"tile_url": url, "attribution": str(item.get("attribution") or "")[:200]}
+    return {"tile_url": url, "attribution": str(item.get("attribution") or "")[:200], "id": str(bid)[:40]}
 
 
 def _msg(m: MessageRow) -> dict:
@@ -258,7 +295,8 @@ def list_displays(event_id: str, request: Request, db: Session = Depends(get_db)
             continue
         active = not d.get("revoked") and d["expires"] > now
         view = d.get("view") or {}
-        out.append({"id": d["id"], "code": d.get("code"), "created": d["created"], "expires": d["expires"],
+        out.append({"id": d["id"], "code": d.get("code"), "name": d.get("name") or "",
+                    "last_seen": tv.seen.get(d["id"]), "created": d["created"], "expires": d["expires"],
                     "active": active, "owner": d.get("owner"), "revoked": bool(d.get("revoked")),
                     "messages": d.get("messages", tv.display_options(view or None)["messages"]),
                     "view_from": view.get("from") or None,
@@ -292,7 +330,7 @@ def clear_alert(event_id: str, display_id: str, request: Request, db: Session = 
             d["alert_cleared"] = time.time()
             set_value(db, KEY, displays)
             db.add(LogbookRow(event_id=event_id, kind="display", object_id=None, actor_id=_actor(request),
-                              summary=f"Bandeau SOS retiré de l'écran (code {d.get('code')})", time=datetime.now(UTC)))
+                              summary=f"Bandeau SOS retiré de l'écran ({_label(d.get('name'), d.get('code'))})", time=datetime.now(UTC)))
             db.commit()
             return {"cleared": True}
     raise HTTPException(status_code=404, detail="display_not_found")
@@ -307,7 +345,7 @@ def revoke_display(event_id: str, display_id: str, request: Request, db: Session
             d["revoked"] = True
             set_value(db, KEY, displays)
             db.add(LogbookRow(event_id=event_id, kind="display", object_id=None, actor_id=actor,
-                              summary=f"Écran d'affichage révoqué (code {d.get('code')})", time=datetime.now(UTC)))
+                              summary=f"Écran d'affichage révoqué ({_label(d.get('name'), d.get('code'))})", time=datetime.now(UTC)))
             db.commit()
             return
     raise HTTPException(status_code=404, detail="display_not_found")
@@ -334,7 +372,7 @@ def send_view(event_id: str, display_id: str, body: ViewIn, request: Request, db
             set_value(db, KEY, displays)
             text = "Vue envoyée sur l'écran" if view else "Vue par défaut rendue à l'écran"
             db.add(LogbookRow(event_id=event_id, kind="display", object_id=None, actor_id=_actor(request),
-                              summary=f"{text} (code {d.get('code')})", time=datetime.now(UTC)))
+                              summary=f"{text} ({_label(d.get('name'), d.get('code'))})", time=datetime.now(UTC)))
             db.commit()
             return {"view": view}
     raise HTTPException(status_code=404, detail="display_not_found")
@@ -356,9 +394,52 @@ def display_messages(event_id: str, display_id: str, body: MessagesIn, request: 
             set_value(db, KEY, displays)
             text = "Messages affichés sur l'écran" if body.messages else "Messages masqués sur l'écran"
             db.add(LogbookRow(event_id=event_id, kind="display", object_id=None, actor_id=_actor(request),
-                              summary=f"{text} (code {d.get('code')})", time=datetime.now(UTC)))
+                              summary=f"{text} ({_label(d.get('name'), d.get('code'))})", time=datetime.now(UTC)))
             db.commit()
             return {"messages": body.messages}
+    raise HTTPException(status_code=404, detail="display_not_found")
+
+
+# The TV asks its state every 10 s: « Identifier » stays readable that long,
+# the TV shows the name 5 s once per request.
+IDENTIFY_WINDOW_S = 15
+
+
+class NameIn(BaseModel):
+    name: str = Field(max_length=200)
+
+
+@router.put("/api/v0.1/events/{event_id}/displays/{display_id}/name")
+def rename_display(event_id: str, display_id: str, body: NameIn, request: Request, db: Session = Depends(get_db)):
+    """« Renommer » in the menu of a screen (any operator, as the other
+    actions on a screen)."""
+    name = tv.clean_name(body.name)
+    if not name:
+        raise HTTPException(status_code=422, detail="name_required")
+    displays = _displays(db)
+    for d in displays:
+        if d["id"] == display_id and d.get("event_id") == event_id and not d.get("revoked"):
+            old = _label(d.get("name"), d.get("code"))
+            d["name"] = name
+            set_value(db, KEY, displays)
+            db.add(LogbookRow(event_id=event_id, kind="display", object_id=None, actor_id=_actor(request),
+                              summary=f"Écran renommé : {old} → {name}", time=datetime.now(UTC)))
+            db.commit()
+            return {"name": name}
+    raise HTTPException(status_code=404, detail="display_not_found")
+
+
+@router.post("/api/v0.1/events/{event_id}/displays/{display_id}/identify")
+def identify_display(event_id: str, display_id: str, db: Session = Depends(get_db)):
+    """« Identifier »: the TV shows its name in very large letters for 5 s
+    (at its next request, within 10 s)."""
+    displays = _displays(db)
+    for d in displays:
+        if d["id"] == display_id and d.get("event_id") == event_id and not d.get("revoked"):
+            d["identify"] = time.time()
+            set_value(db, KEY, displays)
+            db.commit()
+            return {"identify": True, "seconds": tv.IDENTIFY_S}
     raise HTTPException(status_code=404, detail="display_not_found")
 
 
@@ -394,11 +475,15 @@ button{background:#022a58;color:#fff;border:0;margin-top:18px;font-weight:600}#r
 <img class="logo" src="/tv/logo.png" alt="SARCADE"><h1>Afficher SARCADE sur un écran</h1>
 <p>Choisissez l'événement à afficher sur la TV, puis validez.</p>
 <label for="c">Code affiché sur la TV</label><input id="c" autocapitalize="characters" maxlength="12">
+<label for="n">Nom de l'écran</label><input id="n" maxlength="60">
 <label for="e">Événement</label><select id="e">__OPTIONS__</select>
 <button id="b">Afficher sur la TV</button><p id="r"></p>
 <script>document.getElementById('c').value=(new URLSearchParams(location.search).get('code')||'').slice(0,12);
+// Name proposed by the TV (« TV Samsung · 1920×1080 »), kept if typed over.
+(async()=>{const c=document.getElementById('c').value;if(!c)return;try{const r=await fetch('/api/v0.1/tv/code/'+encodeURIComponent(c));
+if(r.ok){const j=await r.json();const n=document.getElementById('n');if(!n.value)n.value=j.name||'';}}catch(e){}})();
 document.getElementById('b').onclick=async()=>{const r=await fetch('/api/v0.1/tv/approve',{method:'POST',
-headers:{'content-type':'application/json'},body:JSON.stringify({code:document.getElementById('c').value,event_id:document.getElementById('e').value})});
+headers:{'content-type':'application/json'},body:JSON.stringify({code:document.getElementById('c').value,event_id:document.getElementById('e').value,name:document.getElementById('n').value})});
 document.getElementById('r').textContent=r.ok?'C\\u2019est fait : la TV affiche l\\u2019événement.':(r.status===401||r.status===403?'Connectez-vous à SARCADE, puis réessayez.':'Code inconnu ou expiré.');};</script>
 </body></html>"""
 
@@ -420,30 +505,37 @@ color:#ffb020;border-left:8px solid #ff4d1a;padding-left:3vw;line-height:1}
 #hint{font-size:18px;color:#ffb020;min-height:1em}
 @media (max-aspect-ratio:1/1){#pair{grid-template-columns:1fr;justify-items:center;text-align:center;padding:6vh 6vw;align-content:center}
 .left{align-items:center}#code{border-left:0;padding-left:0}}
-#app{display:none;height:100%;grid-template-columns:1fr minmax(300px,17%);grid-template-rows:68px 1fr}
-header{grid-column:1/3;display:flex;align-items:center;gap:22px;padding:0 20px 0 10px;background:#03152b;border-bottom:1px solid #1e2c38;overflow:hidden;min-width:0}
+/* Day / night of the page (« Envoyer ma vue » pushes the mode of the phone, 30 Oct 2026). */
+#app{--bg:#03152b;--fg:#eef3f9;--strong:#fff;--muted:#c4d1e0;--h2:#b9c6d2;--line:#1e2c38;--line2:#16212b;--panel:rgba(3,21,43,.88);--amber:#ffb020;--red:#ff4d5e;--ok:#3ddc84;--shadow:#000}
+#app.day{--bg:#f4f7fb;--fg:#0b1a2b;--strong:#000;--muted:#2c3e52;--h2:#33475c;--line:#b9c6d2;--line2:#d5dee8;--panel:rgba(255,255,255,.94);--amber:#8a4b00;--red:#b3141f;--ok:#137a3a;--shadow:#fff}
+#app{display:none;height:100%;grid-template-columns:1fr minmax(300px,17%);grid-template-rows:68px 1fr;background:var(--bg);color:var(--fg)}
+#app.nomsg{grid-template-columns:1fr}#app.nomsg aside{display:none}
+.night .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.95) contrast(.9) saturate(.6)}
+header{grid-column:1/-1;display:flex;align-items:center;gap:22px;padding:0 20px 0 10px;background:var(--bg);border-bottom:1px solid var(--line);overflow:hidden;min-width:0}
 .hlogo{background:#fff;border-radius:10px;padding:4px 10px;display:flex}.hlogo img{height:50px;display:block}
 #title{font-size:26px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-.stats{display:flex;align-items:center;gap:26px;margin-left:auto;font-size:19px;color:#c4d1e0;white-space:nowrap;min-width:0;overflow:hidden}.stats b{color:#fff;font-size:22px}
-.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:#3ddc84;margin-right:7px}#link.lost{color:#ff6b6b}#link.lost .dot{background:#ff4d5e}
-#clock{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;margin-left:10px;color:#fff}
-#sun{font-size:17px;color:#c4d1e0;line-height:1.25;font-variant-numeric:tabular-nums}#sun b{color:#ffb020;font-weight:700}
-#map{height:100%;min-width:0}aside{overflow:hidden;padding:12px 14px;border-left:1px solid #1e2c38;font-size:17px;min-width:0;overflow-wrap:anywhere;word-wrap:break-word}
-h2{font-size:16px;color:#b9c6d2;text-transform:uppercase;letter-spacing:1px;margin:14px 0 6px}
-.m{padding:6px 0;border-bottom:1px solid #16212b}.u{color:#ffb020}.i{color:#ff4d5e;font-weight:700}
-#wx{display:flex;align-items:center;gap:6px;font-size:28px;font-weight:700;color:#fff;margin-left:4px;white-space:nowrap}
+.stats{display:flex;align-items:center;gap:26px;margin-left:auto;font-size:19px;color:var(--muted);white-space:nowrap;min-width:0;overflow:hidden}.stats b{color:var(--strong);font-size:22px}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--ok);margin-right:7px}#link.lost{color:var(--red)}#link.lost .dot{background:var(--red)}
+#clock{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;margin-left:10px;color:var(--strong)}
+#sun{font-size:17px;color:var(--muted);line-height:1.25;font-variant-numeric:tabular-nums}#sun b{color:var(--amber);font-weight:700}
+#map{height:100%;min-width:0}aside{overflow:hidden;padding:12px 14px;border-left:1px solid var(--line);font-size:17px;min-width:0;overflow-wrap:anywhere;word-wrap:break-word}
+h2{font-size:16px;color:var(--h2);text-transform:uppercase;letter-spacing:1px;margin:14px 0 6px}
+.m{padding:6px 0;border-bottom:1px solid var(--line2)}.u{color:var(--amber)}.i{color:var(--red);font-weight:700}
+#wx{display:flex;align-items:center;gap:6px;font-size:28px;font-weight:700;color:var(--strong);margin-left:4px;white-space:nowrap}
 .vig{display:inline-block;width:12px;height:12px;border-radius:50%;margin-left:2px}.vig.orange{background:#ff8c1a}.vig.red{background:#ff4d5e}
 .ex{background:#ffb020;color:#03152b;font-weight:800;border-radius:4px;padding:0 5px;font-size:12px}
-.zlab span{display:inline-block;white-space:nowrap;background:rgba(3,21,43,.85);color:#fff;border-left:4px solid;padding:2px 7px;font-size:14px;border-radius:4px}
+.zlab span{display:inline-block;white-space:nowrap;background:var(--panel);color:var(--fg);border-left:4px solid;padding:2px 7px;font-size:14px;border-radius:4px}
 #mapBox{position:relative;min-width:0;height:100%}
-#legend{display:none;position:absolute;left:10px;bottom:10px;z-index:900;background:rgba(3,21,43,.88);border:1px solid #1e2c38;border-radius:8px;padding:6px 10px;font-size:15px;max-width:40%}
+#legend{display:none;position:absolute;left:10px;bottom:10px;z-index:900;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:15px;max-width:40%}
 #legend div{display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.6}
 #legend i{display:inline-block;width:22px;height:4px;border-radius:2px;flex:none}#legend .zr{width:14px;height:14px;border-radius:50%;background:rgba(255,77,94,.15);border:2px solid}
-#from{display:none;position:absolute;right:10px;bottom:10px;z-index:900;background:rgba(3,21,43,.7);color:#c4d1e0;font-size:13px;border-radius:6px;padding:2px 8px}
-.txt span{white-space:nowrap;font-size:16px;font-weight:700;text-shadow:0 0 3px #000}
+#from{display:none;position:absolute;right:10px;bottom:10px;z-index:900;background:var(--panel);color:var(--muted);font-size:13px;border-radius:6px;padding:2px 8px}
+.txt span{white-space:nowrap;font-size:16px;font-weight:700;text-shadow:0 0 3px var(--shadow)}
 .lowzoom .rlab{display:none}
 #sos{display:none;background:#ff4d5e;color:#fff;font-weight:800;font-size:16px;border-radius:999px;padding:3px 10px;animation:blink 1.2s steps(2,start) infinite}
 @keyframes blink{to{visibility:hidden}}
+#ident{display:none;position:fixed;inset:0;z-index:3000;align-items:center;justify-content:center;text-align:center;padding:4vw;box-sizing:border-box;
+background:rgba(3,21,43,.92);color:#fff;font-size:min(14vw,22vh);font-weight:800;line-height:1.1;overflow-wrap:anywhere}
 #alert{display:none;position:fixed;left:0;right:0;top:0;padding:18px;background:#ff4d5e;color:#fff;font-size:30px;font-weight:700;text-align:center;z-index:2000}
 </style></head><body>
 <div id="pair"><div class="left"><div class="logo"><img src="/tv/logo.png" alt="SARCADE"></div>
@@ -451,7 +543,7 @@ h2{font-size:16px;color:#b9c6d2;text-transform:uppercase;letter-spacing:1px;marg
 <div class="how">Dans l'application SARCADE : <b>Outils › Afficher sur une TV</b>, puis scannez le QR code ou saisissez ce code.</div>
 <div id="hint"></div></div><div id="qr"></div></div>
 <div id="app"><header><div class="hlogo"><img src="/tv/logo.png" alt="SARCADE"></div><div id="title"></div><div class="stats"><span><b id="nOps">0</b> opérateurs actifs</span><span><b id="nAprs">0</b> stations APRS</span><span id="link"><span class="dot"></span><span id="linkTxt">Connexion…</span></span></div><span id="sos" title="Détresse en cours">SOS</span><div id="wx"></div><div id="sun"></div><div id="clock">--:--</div></header><div id="mapBox"><div id="map"></div><div id="legend"></div><div id="from"></div></div><aside><div id="msgBox"><h2>Messages</h2><div id="msgs"></div></div></aside></div>
-<div id="alert"></div>
+<div id="alert"></div><div id="ident"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -467,7 +559,16 @@ for(const m of ms){const pt=map.latLngToContainerPoint(m.getLatLng());
 const clash=kept.some(q=>Math.abs(q.x-pt.x)<110&&Math.abs(q.y-pt.y)<22);
 if(clash)m.closeTooltip();else{m.openTooltip();kept.push(pt);}}}
 function hm(t){const d=new Date(t);return d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});}
-async function pair(){const r=await fetch('/api/v0.1/tv/pair',{method:'POST'});if(!r.ok){$('hint').textContent='Réessai dans une minute…';setTimeout(pair,60000);return;}
+// Default name of this screen, from its browser (« TV Samsung · 1920×1080 »):
+// brand or system announced in the user agent, and the resolution.
+function tvName(){const u=navigator.userAgent||'';const B=[[/samsung|tizen/i,'TV Samsung'],[/web0s|webos|\blg\b|netcast/i,'TV LG'],
+[/bravia|sony/i,'TV Sony'],[/philips|nettv/i,'TV Philips'],[/hisense|vidaa/i,'TV Hisense'],[/panasonic|viera/i,'TV Panasonic'],
+[/\btcl\b/i,'TV TCL'],[/xiaomi|mitv/i,'TV Xiaomi'],[/\baft|fire tv/i,'Fire TV'],[/roku/i,'Roku'],[/apple ?tv|tvos/i,'Apple TV'],
+[/google ?tv|android ?tv|\bcrkey/i,'Android TV'],[/smart-?tv|hbbtv/i,'Smart TV'],[/cros/i,'Écran ChromeOS'],[/windows/i,'Écran Windows'],
+[/mac os x|macintosh/i,'Écran Mac'],[/android/i,'Écran Android'],[/linux/i,'Écran Linux']];
+const b=(B.find(x=>x[0].test(u))||[0,'Écran'])[1];const r=window.devicePixelRatio||1;
+return b+' · '+Math.round(screen.width*r)+'×'+Math.round(screen.height*r);}
+async function pair(){const r=await fetch('/api/v0.1/tv/pair',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:tvName()})});if(!r.ok){$('hint').textContent='Réessai dans une minute…';setTimeout(pair,60000);return;}
 const p=await r.json();$('code').textContent=p.code;$('qr').innerHTML='';new QRCode($('qr'),{text:'https://'+appHost+'/tv/approve?code='+p.code,width:340,height:340});
 const until=Date.now()+p.expires_in*1000;const poll=async()=>{if(Date.now()>until){pair();return;}
 const s=await fetch('/api/v0.1/tv/pair/'+p.pair_id);if(s.ok){const j=await s.json();if(j.status==='approved'){token=j.token;localStorage.setItem('sarcade_tv_token',token);start();return;}}
@@ -542,13 +643,27 @@ $('legend').innerHTML=keys.map(k=>'<div><i style="background:'+by[k].color+'"></
 function drawRefs(o){refL.clearLayers();for(const r of rData){const hp=r.category==='HIGH_POINT',c=hp?'#7ddc5a':'#c77dff',op=(hp?o.high:o.relay)??o.ref??1;
 L.circleMarker([r.lat,r.lon],{radius:5,color:c,weight:2,opacity:op,fillOpacity:op*0.6})
 .bindTooltip(esc(r.callsign||r.name),{permanent:true,direction:'right',className:'rlab'}).addTo(refL);}}
+// Day / night chosen by the server (mode pushed with the view, else sunrise
+// and sunset); in night the plan tiles are darkened as in the application
+// (not the photos). Messages hidden: the column leaves, the map takes the
+// whole width and keeps its centre and zoom.
+let lastLook='';
+function look(s){const night=s.night!==false,msg=!(s.options&&s.options.messages===false);
+const b=String((s.view&&s.view.basemap)||(s.default_base&&s.default_base.id)||'');const dark=night&&!/photo|sat/i.test(b);
+const k=night+'|'+dark+'|'+msg;if(k===lastLook)return;lastLook=k;
+$('app').classList.toggle('day',!night);$('app').classList.toggle('nomsg',!msg);map.getContainer().classList.toggle('night',dark);
+map.invalidateSize({animate:false});}
+// « Identifier »: the name of this screen in very large letters, 5 s.
+let identId='';
+function identify(i){if(!i||i.id===identId)return;identId=i.id;$('ident').textContent=i.name;$('ident').style.display='flex';
+setTimeout(()=>{$('ident').style.display='none';},(Number(i.seconds)||5)*1000);}
 function layers(s){const o=(s.options&&s.options.opacity)||{},key=JSON.stringify(o);
 if(s.drawings)dData=s.drawings;if(s.bearings){bData=s.bearings;zData=s.zones||[];}if(s.references)rData=s.references;
 if(s.drawings||s.bearings||key!==lastOp){drawFeatures(o.draw??1);drawBearings(o.brg??1);}
 if(s.references||key!==lastOp)drawRefs(o);lastOp=key;fr=s.features_rev||'';rr=s.references_rev||'';
 // One opacity per layer: operators and APRS apart.
 for(const m of Object.values(markers)){const op=(m._aprs?o.aprs:o.ops)??o.ops??1;m.setStyle({opacity:op,fillOpacity:.9*op});m.bringToFront();}
-$('msgBox').style.display=s.options&&s.options.messages===false?'none':'';}
+look(s);}
 // Top bar: clock, and the state of the link with the server.
 let lastOk=0;
 function tick(){const d=new Date();$('clock').textContent=d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});}
@@ -564,7 +679,7 @@ for(const p of s.positions){const ll=[p.lat,p.lon];pts.push(ll);const k=p.device
 if(!markers[k]){markers[k]=L.circleMarker(ll,{radius:aprs?6:8,color:aprs?'#ffb020':'#3dd6f5',fillOpacity:.9}).bindTooltip(esc(label(p)),{permanent:true,direction:'right'}).addTo(map);markers[k]._aprs=aprs;}else markers[k].setLatLng(ll);}
 // Stations no longer shown (hidden layer) leave the map.
 const keep=new Set(s.positions.map(p=>p.device_id));for(const k of Object.keys(markers))if(!keep.has(k)){map.removeLayer(markers[k]);delete markers[k];}
-layers(s);weather(s.weather);
+layers(s);weather(s.weather);identify(s.identify);
 declutter();
 applyView(s.view);
 const fit=active.length?active:pts;if(fit.length&&!map._fitted){map.fitBounds(fit,{padding:[40,40],maxZoom:15});map._fitted=true;}
