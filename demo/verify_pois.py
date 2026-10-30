@@ -38,10 +38,14 @@ def sync(action, payload):
 
 
 poi = {"id": pid, "event_id": event, "kind": "designated", "label": "Point haut", "lat": 48.82, "lon": 1.91,
-       "created_at": NOW, "created_by": "TEL-02", "color": 0xFF3DD6F5}
+       "created_at": NOW, "created_by": "TEL-02", "color": 0xFF3DD6F5, "icon": "gathering"}
 check(sync("create", poi) == "accepted", "TEL-02 creates a point")
 listed = {p["id"]: p for p in c.get(f"{E}/pois").json()}
 check(listed[pid]["created_by"] == "TEL-02" and listed[pid]["color"] == 0xFF3DD6F5, "author and colour kept")
+check(listed[pid]["icon"] == "gathering", "icon kept")
+check(sync("update", {"id": pid, "icon": "skull", "updated_by": "TEL-02"}) == "rejected", "unknown icon refused")
+check(sync("update", {"id": pid, "icon": "helipad", "updated_by": "TEL-02"}) == "accepted", "TEL-02 changes the icon")
+check({p["id"]: p for p in c.get(f"{E}/pois").json()}[pid]["icon"] == "helipad", "new icon listed")
 check(sync("update", {"id": pid, "label": "Gué", "updated_by": "TEL-03"}) == "rejected", "TEL-03 cannot rename it")
 check(sync("update", {"id": pid, "label": "Gué", "updated_by": "TEL-02"}) == "accepted", "TEL-02 renames it")
 check({p["id"]: p for p in c.get(f"{E}/pois").json()}[pid]["label"] == "Gué", "new name listed")

@@ -227,6 +227,10 @@ async def create_poi(event_id: str, payload: POICreate, db: Session = Depends(ge
     row = POIRow(id=payload.id, event_id=event_id, kind=payload.kind, label=payload.label,
         point=WKTElement(f"POINT({payload.lon} {payload.lat})", srid=4326),
         created_at=datetime.now(UTC), version=0, created_by=payload.created_by, color=payload.color)
+    try:
+        row.icon = pois.clean_icon(payload.icon)
+    except pois.InvalidPoi:
+        raise HTTPException(status_code=422, detail="invalid_icon")
     db.add(row); db.commit(); db.refresh(row)
     data = poi_dict(row)
     await manager.broadcast(event_id, {"type": "poi.created", "data": data})
@@ -555,10 +559,15 @@ def _apply_poi_change(db: Session, op, now: datetime, pco: bool) -> tuple[str, i
         raise SyncRejected("seul l'auteur du point ou le PCO peut le modifier", journal=dict(
             category="rights", action="write_refused", outcome="refused", actor=actor, event_id=op.event_id,
             details={"object_type": "poi", "object_id": op.object_id, "action": op.action}))
+    update = op.action == "update"
     try:
-        label = pois.clean_label(op.payload.get("label")) if op.action == "update" else row.label
+        label = pois.clean_label(op.payload.get("label")) if update and "label" in op.payload else row.label
     except pois.InvalidPoi:
         raise SyncRejected("nom de point invalide")
+    try:
+        icon = pois.clean_icon(op.payload.get("icon")) if update and "icon" in op.payload else row.icon
+    except pois.InvalidPoi:
+        raise SyncRejected("icône de point invalide")
     status, cursor = record_operation(
         db, event_id=op.event_id, operation_id=op.operation_id, object_id=op.object_id,
         object_type=op.object_type, action=op.action, payload=op.payload, client_time=op.client_time)
@@ -576,7 +585,7 @@ def _apply_poi_change(db: Session, op, now: datetime, pco: bool) -> tuple[str, i
         db.add(LogbookRow(event_id=op.event_id, kind="poi", object_id=row.id, actor_id=actor, time=now,
                           summary=pois.logbook_summary(row.label, "delete")))
     else:
-        row.label = label
+        row.label, row.icon = label, icon
     db.flush()
     result = pois.state(row)
     journal.payload = result
@@ -661,6 +670,7 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
             point=WKTElement(f'POINT({float(p["lon"])} {float(p["lat"])})', srid=4326),
             created_at=_iso(p["created_at"]), version=0,
             created_by=pois.actor_of(p), color=pois.clean_color(p.get("color")),
+            icon=pois.clean_icon(p.get("icon")),
         )
         db.add(row); db.flush()
         return status, cursor, {"type": "poi.created", "data": p}

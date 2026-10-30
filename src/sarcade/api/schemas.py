@@ -56,6 +56,7 @@ class POICreate(BaseModel):
     lon: float = Field(ge=-180, le=180)
     created_by: str | None = Field(default=None, max_length=64)
     color: int | None = Field(default=None, ge=0, le=0xFFFFFFFF)
+    icon: str | None = Field(default=None, max_length=32)
 
 
 class POIOut(POICreate):
