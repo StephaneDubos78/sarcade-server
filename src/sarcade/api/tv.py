@@ -22,7 +22,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from sarcade import roles, tv
-from sarcade.db.models import EventRow, LogbookRow, MapFeatureRow, MessageRow, PositionRow, ReferenceSiteRow
+from sarcade.basemaps import catalog
+from sarcade.events import settings as event_settings
+from sarcade.db.models import CustomBasemapRow, EventRow, LogbookRow, MapFeatureRow, MessageRow, PositionRow, ReferenceSiteRow
 from sarcade.features import service as features
 from sarcade.weather import service as weather_service
 from sarcade.updates.service import get_value, set_value
@@ -64,7 +66,7 @@ def pair(request: Request):
     if not tv.store.allowed(_client(request)):
         raise HTTPException(status_code=429, detail="too_many_requests")
     try:
-        p = tv.store.new()
+        p = tv.store.new(ip=_client(request))
     except OverflowError:
         raise HTTPException(status_code=503, detail="busy")
     return {"pair_id": p.pair_id, "code": p.code, "expires_in": tv.CODE_TTL_S}
@@ -88,6 +90,19 @@ def pair_status(pair_id: str, db: Session = Depends(get_db)):
     set_value(db, KEY, displays)
     db.commit()
     return {"status": "approved", "token": token, "event_id": event_id}
+
+
+@router.get("/api/v0.1/tv/nearby")
+def nearby(request: Request, db: Session = Depends(get_db)):
+    """Codes shown by TVs behind the same public address as the caller
+    (« validation automatique depuis le même réseau », 30 Oct 2026): only
+    for a PCO or an administrator (roles of the server, checked email);
+    nothing is approved here, the operator confirms the code shown."""
+    email = checked_email(request)
+    if email is None or "pco" not in roles.roles_of(db, email):
+        return []
+    return [{"code": p.code, "expires_in": max(0, int(tv.CODE_TTL_S - (time.time() - p.created)))}
+            for p in tv.store.nearby(_client(request))]
 
 
 class ApproveIn(BaseModel):
@@ -198,7 +213,24 @@ def state(request: Request, fr: str | None = Query(None, max_length=32), rr: str
                          references=layers.get("references"))
     snap["features_rev"], snap["references_rev"] = layers["features_rev"], layers["references_rev"]
     snap["view"] = view
+    # « Messages : afficher / masquer » of this screen, applied at once.
+    snap["options"] = {**snap["options"], "messages": d.get("messages", snap["options"]["messages"])}
+    snap["default_base"] = _default_base(db, event)
     return snap
+
+
+def _default_base(db: Session, event: EventRow) -> dict | None:
+    """Base map of the event (default view of a screen), https only."""
+    bid = event_settings.merged(event.settings).get("basemap") or "osm"
+    item = next((b for b in catalog.BUILT_IN if b["id"] == bid), None)
+    if item is None:
+        row = db.get(CustomBasemapRow, bid)
+        item = dict(row.data) if row is not None else None
+    url = (item or {}).get("url") or ""
+    if not (url.startswith("https://") and all(t in url for t in ("{z}", "{x}", "{y}"))
+            and not any(ch in url for ch in "\"'<> ")):
+        return None
+    return {"tile_url": url, "attribution": str(item.get("attribution") or "")[:200]}
 
 
 def _msg(m: MessageRow) -> dict:
@@ -225,8 +257,11 @@ def list_displays(event_id: str, request: Request, db: Session = Depends(get_db)
         if d.get("event_id") != event_id:
             continue
         active = not d.get("revoked") and d["expires"] > now
+        view = d.get("view") or {}
         out.append({"id": d["id"], "code": d.get("code"), "created": d["created"], "expires": d["expires"],
-                    "active": active, "owner": d.get("owner"),
+                    "active": active, "owner": d.get("owner"), "revoked": bool(d.get("revoked")),
+                    "messages": d.get("messages", tv.display_options(view or None)["messages"]),
+                    "view_from": view.get("from") or None,
                     "alert": active and _alert(db, event_id, d)["alert"] is not None,
                     "can_clear_alert": _may_clear(d, email, admin)})
     return out
@@ -294,12 +329,36 @@ def send_view(event_id: str, display_id: str, body: ViewIn, request: Request, db
     for d in displays:
         if d["id"] == display_id and d.get("event_id") == event_id and not d.get("revoked"):
             d["view"] = view
+            if view is not None:
+                d["messages"] = view["messages"]
             set_value(db, KEY, displays)
-            text = "Vue envoyée sur l'écran" if view else "Cadrage automatique rendu à l'écran"
+            text = "Vue envoyée sur l'écran" if view else "Vue par défaut rendue à l'écran"
             db.add(LogbookRow(event_id=event_id, kind="display", object_id=None, actor_id=_actor(request),
                               summary=f"{text} (code {d.get('code')})", time=datetime.now(UTC)))
             db.commit()
             return {"view": view}
+    raise HTTPException(status_code=404, detail="display_not_found")
+
+
+class MessagesIn(BaseModel):
+    messages: bool
+
+
+@router.put("/api/v0.1/events/{event_id}/displays/{display_id}/messages")
+def display_messages(event_id: str, display_id: str, body: MessagesIn, request: Request, db: Session = Depends(get_db)):
+    """« Messages : afficher / masquer » in the menu of a screen: applied at
+    once, without sending the view again (card « Envoyer ma vue » par
+    écran, option A of 30 Oct 2026)."""
+    displays = _displays(db)
+    for d in displays:
+        if d["id"] == display_id and d.get("event_id") == event_id and not d.get("revoked"):
+            d["messages"] = body.messages
+            set_value(db, KEY, displays)
+            text = "Messages affichés sur l'écran" if body.messages else "Messages masqués sur l'écran"
+            db.add(LogbookRow(event_id=event_id, kind="display", object_id=None, actor_id=_actor(request),
+                              summary=f"{text} (code {d.get('code')})", time=datetime.now(UTC)))
+            db.commit()
+            return {"messages": body.messages}
     raise HTTPException(status_code=404, detail="display_not_found")
 
 
@@ -362,7 +421,7 @@ color:#ffb020;border-left:8px solid #ff4d1a;padding-left:3vw;line-height:1}
 @media (max-aspect-ratio:1/1){#pair{grid-template-columns:1fr;justify-items:center;text-align:center;padding:6vh 6vw;align-content:center}
 .left{align-items:center}#code{border-left:0;padding-left:0}}
 #app{display:none;height:100%;grid-template-columns:1fr minmax(300px,17%);grid-template-rows:68px 1fr}
-header{grid-column:1/3;display:flex;align-items:center;gap:22px;padding:0 20px;background:#03152b;border-bottom:1px solid #1e2c38;overflow:hidden;min-width:0}
+header{grid-column:1/3;display:flex;align-items:center;gap:22px;padding:0 20px 0 10px;background:#03152b;border-bottom:1px solid #1e2c38;overflow:hidden;min-width:0}
 .hlogo{background:#fff;border-radius:10px;padding:4px 10px;display:flex}.hlogo img{height:50px;display:block}
 #title{font-size:26px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .stats{display:flex;align-items:center;gap:26px;margin-left:auto;font-size:19px;color:#c4d1e0;white-space:nowrap;min-width:0;overflow:hidden}.stats b{color:#fff;font-size:22px}
@@ -375,7 +434,12 @@ h2{font-size:16px;color:#b9c6d2;text-transform:uppercase;letter-spacing:1px;marg
 #wx{display:flex;align-items:center;gap:6px;font-size:28px;font-weight:700;color:#fff;margin-left:4px;white-space:nowrap}
 .vig{display:inline-block;width:12px;height:12px;border-radius:50%;margin-left:2px}.vig.orange{background:#ff8c1a}.vig.red{background:#ff4d5e}
 .ex{background:#ffb020;color:#03152b;font-weight:800;border-radius:4px;padding:0 5px;font-size:12px}
-.blab span{display:inline-block;white-space:nowrap;background:rgba(3,21,43,.85);color:#fff;border-left:4px solid;padding:2px 6px;font-size:14px;border-radius:4px}
+.zlab span{display:inline-block;white-space:nowrap;background:rgba(3,21,43,.85);color:#fff;border-left:4px solid;padding:2px 7px;font-size:14px;border-radius:4px}
+#mapBox{position:relative;min-width:0;height:100%}
+#legend{display:none;position:absolute;left:10px;bottom:10px;z-index:900;background:rgba(3,21,43,.88);border:1px solid #1e2c38;border-radius:8px;padding:6px 10px;font-size:15px;max-width:40%}
+#legend div{display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.6}
+#legend i{display:inline-block;width:22px;height:4px;border-radius:2px;flex:none}#legend .zr{width:14px;height:14px;border-radius:50%;background:rgba(255,77,94,.15);border:2px solid}
+#from{display:none;position:absolute;right:10px;bottom:10px;z-index:900;background:rgba(3,21,43,.7);color:#c4d1e0;font-size:13px;border-radius:6px;padding:2px 8px}
 .txt span{white-space:nowrap;font-size:16px;font-weight:700;text-shadow:0 0 3px #000}
 .lowzoom .rlab{display:none}
 #sos{display:none;background:#ff4d5e;color:#fff;font-weight:800;font-size:16px;border-radius:999px;padding:3px 10px;animation:blink 1.2s steps(2,start) infinite}
@@ -384,9 +448,9 @@ h2{font-size:16px;color:#b9c6d2;text-transform:uppercase;letter-spacing:1px;marg
 </style></head><body>
 <div id="pair"><div class="left"><div class="logo"><img src="/tv/logo.png" alt="SARCADE"></div>
 <div class="lead">Afficher SARCADE sur cet écran</div><div id="code">······</div>
-<div class="how">Dans l'application SARCADE : <b>Paramètres › Affichage › Écrans</b>, puis scannez le QR code ou saisissez ce code.</div>
+<div class="how">Dans l'application SARCADE : <b>Outils › Afficher sur une TV</b>, puis scannez le QR code ou saisissez ce code.</div>
 <div id="hint"></div></div><div id="qr"></div></div>
-<div id="app"><header><div class="hlogo"><img src="/tv/logo.png" alt="SARCADE"></div><div id="title"></div><div class="stats"><span><b id="nOps">0</b> opérateurs actifs</span><span><b id="nAprs">0</b> stations APRS</span><span id="link"><span class="dot"></span><span id="linkTxt">Connexion…</span></span></div><span id="sos" title="Détresse en cours">SOS</span><div id="wx"></div><div id="sun"></div><div id="clock">--:--</div></header><div id="map"></div><aside><div id="msgBox"><h2>Messages</h2><div id="msgs"></div></div></aside></div>
+<div id="app"><header><div class="hlogo"><img src="/tv/logo.png" alt="SARCADE"></div><div id="title"></div><div class="stats"><span><b id="nOps">0</b> opérateurs actifs</span><span><b id="nAprs">0</b> stations APRS</span><span id="link"><span class="dot"></span><span id="linkTxt">Connexion…</span></span></div><span id="sos" title="Détresse en cours">SOS</span><div id="wx"></div><div id="sun"></div><div id="clock">--:--</div></header><div id="mapBox"><div id="map"></div><div id="legend"></div><div id="from"></div></div><aside><div id="msgBox"><h2>Messages</h2><div id="msgs"></div></div></aside></div>
 <div id="alert"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -410,11 +474,15 @@ const s=await fetch('/api/v0.1/tv/pair/'+p.pair_id);if(s.ok){const j=await s.jso
 setTimeout(poll,3000);};poll();}
 // View sent by a phone (« Envoyer ma vue »): centre, zoom and base map, kept
 // until the next one; none: automatic framing on the stations.
-const OSM='https://tile.openstreetmap.org/{z}/{x}/{y}.png';let base=null,viewRev;
+const OSM='https://tile.openstreetmap.org/{z}/{x}/{y}.png';let base=null,viewRev,defBase=null;
 function setBase(url,attr){const u=url||OSM;if(base&&base._url===u)return;if(base)map.removeLayer(base);
 base=L.tileLayer(u,{attribution:esc(url?(attr||''):'© OpenStreetMap'),maxZoom:19}).addTo(map);}
-function applyView(v){const rev=v?v.rev:null;if(rev===viewRev)return;viewRev=rev;
-if(v){map._fitted=true;map.setView([v.lat,v.lon],v.zoom);setBase(v.tile_url,v.attribution);}else{map._fitted=false;setBase(null);}}
+// No automatic return (30 Oct 2026): the view stays until « Revenir à la vue
+// par défaut » (framing on the active operators, base map of the event).
+function applyView(v){const rev=v?v.rev:null;
+if(v){$('from').textContent=v.from?'Vue de '+v.from:'';$('from').style.display=v.from?'block':'none';}else $('from').style.display='none';
+if(!v)setBase(defBase&&defBase.tile_url,defBase&&defBase.attribution);if(rev===viewRev)return;viewRev=rev;
+if(v){map._fitted=true;map.setView([v.lat,v.lon],v.zoom);setBase(v.tile_url,v.attribution);}else map._fitted=false;}
 // Weather of the current hour (computed by the server at most every 10 min).
 const C1='<path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z" fill="#b9c6d2"/>';
 const C2='<path d="M7 15h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 6.5 4.3 4.3 0 0 0 7 15z" fill="#b9c6d2"/>';
@@ -433,7 +501,7 @@ $('wx').innerHTML=w&&w.temp_c!=null?'<span>'+Math.round(Number(w.temp_c))+'°</s
 $('sun').innerHTML=w&&w.sunrise&&w.sunset?'<b>↑</b> '+hm(w.sunrise)+'<br><b>↓</b> '+hm(w.sunset):'';}
 // Layers of the view: drawings, bearings, reference sites; sent again by
 // the server only when they changed (revisions fr / rr).
-let fr='',rr='',lastOp='',drawL,brgL,refL,dData=[],bData=[],rData=[];
+let fr='',rr='',lastOp='',drawL,brgL,refL,dData=[],bData=[],rData=[],zData=[];
 function argb(c){c=Number(c)>>>0;return{col:'#'+(c&0xFFFFFF).toString(16).padStart(6,'0'),a:((c>>>24)&255)/255||1};}
 function arrowHead(pts){const a=pts[pts.length-2],b=pts[pts.length-1],k=Math.cos(b[0]*Math.PI/180)||1;
 const dx=(b[1]-a[1])*k,dy=b[0]-a[0],h=Math.hypot(dx,dy)*0.2,t=Math.atan2(dy,dx);
@@ -451,19 +519,35 @@ if(f.label&&f.kind!=='text')l.bindTooltip(esc(f.label),{permanent:true,direction
 function dest(lat,lon,az,m){const d=m/6371000,t=az*Math.PI/180,p1=lat*Math.PI/180,l1=lon*Math.PI/180;
 const p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(t));
 return[p2*180/Math.PI,(l1+Math.atan2(Math.sin(t)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2)))*180/Math.PI];}
-function drawBearings(op){brgL.clearLayers();for(const b of bData){const col=/^#[0-9a-f]{6}$/i.test(b.color)?b.color:'#ff4d5e';
-const st={color:col,weight:3,opacity:op},end=dest(b.lat,b.lon,b.azimuth_deg,b.length_m),name=b.search||b.label;
-L.circleMarker([b.lat,b.lon],{...st,radius:4,fillOpacity:op}).addTo(brgL);L.polyline([[b.lat,b.lon],end],st).addTo(brgL);
-if(name||b.exercise)L.marker(end,{interactive:false,icon:L.divIcon({className:'blab',iconSize:null,
-html:'<span style="border-color:'+col+';opacity:'+op+'">'+(b.exercise?'<span class="ex">EXERCICE</span> ':'')+esc(name)+'</span>'})}).addTo(brgL);}}
-function drawRefs(op){refL.clearLayers();for(const r of rData){const c=r.category==='HIGH_POINT'?'#7ddc5a':'#c77dff';
+// Colours computed by the server, the same as the application (406 violet,
+// 121,5 red, exercise 121,375 blue); no label at the end of a bearing
+// (30 Oct 2026): the legend bottom left names the signals.
+const col6=c=>/^#[0-9a-f]{6}$/i.test(c||'')?c:'#3DD6F5';
+function drawBearings(op){brgL.clearLayers();for(const b of bData){const col=col6(b.color),len=Number(b.length_m)||10000,cone=Number(b.cone_deg??5);
+const st={color:col,weight:3,opacity:op},end=dest(b.lat,b.lon,b.azimuth_deg,len);
+if(cone>0)L.polygon([[b.lat,b.lon],dest(b.lat,b.lon,(b.azimuth_deg-cone+360)%360,len),dest(b.lat,b.lon,(b.azimuth_deg+cone)%360,len)],
+{color:col,weight:1,opacity:.35*op,fillColor:col,fillOpacity:.10*op,interactive:false}).addTo(brgL);
+L.circleMarker([b.lat,b.lon],{...st,radius:4,fillOpacity:op}).addTo(brgL);L.polyline([[b.lat,b.lon],end],st).addTo(brgL);}
+// Probable zone and crossings of each search, computed by the server.
+for(const z of zData){const col=col6(z.color);for(const c of z.crossings||[])L.circleMarker(c,{radius:4,color:col,weight:1,opacity:op,fillOpacity:op}).addTo(brgL);
+if(z.lat==null)continue;L.circle([z.lat,z.lon],{radius:Number(z.radius_m)||50,color:'#ff4d5e',weight:2,opacity:op,fillColor:'#ff4d5e',fillOpacity:.13*op,interactive:false}).addTo(brgL);
+L.marker([z.lat,z.lon],{interactive:false,icon:L.divIcon({className:'zlab',iconSize:null,iconAnchor:[-10,12],
+html:'<span style="border-color:'+col+';opacity:'+op+'">'+(z.exercise?'<span class="ex">EXERCICE</span> ':'')+esc(z.label)+'</span>'})}).addTo(brgL);}
+legend();}
+// Legend bottom left, always visible while bearings are shown.
+function legend(){const by={};for(const b of bData){const k=b.search||'';by[k]=by[k]||{color:col6(b.color),ex:false};by[k].ex=by[k].ex||b.exercise;}
+const keys=Object.keys(by).sort();const zone=zData.some(z=>z.lat!=null);
+$('legend').innerHTML=keys.map(k=>'<div><i style="background:'+by[k].color+'"></i>'+esc(k||'Sans signal')+(by[k].ex?' <span class="ex">EXERCICE</span>':'')+'</div>').join('')
++(zone?'<div><i class="zr" style="border-color:#ff4d5e"></i>Zone probable</div>':'');$('legend').style.display=keys.length?'block':'none';}
+function drawRefs(o){refL.clearLayers();for(const r of rData){const hp=r.category==='HIGH_POINT',c=hp?'#7ddc5a':'#c77dff',op=(hp?o.high:o.relay)??o.ref??1;
 L.circleMarker([r.lat,r.lon],{radius:5,color:c,weight:2,opacity:op,fillOpacity:op*0.6})
 .bindTooltip(esc(r.callsign||r.name),{permanent:true,direction:'right',className:'rlab'}).addTo(refL);}}
 function layers(s){const o=(s.options&&s.options.opacity)||{},key=JSON.stringify(o);
-if(s.drawings)dData=s.drawings;if(s.bearings)bData=s.bearings;if(s.references)rData=s.references;
+if(s.drawings)dData=s.drawings;if(s.bearings){bData=s.bearings;zData=s.zones||[];}if(s.references)rData=s.references;
 if(s.drawings||s.bearings||key!==lastOp){drawFeatures(o.draw??1);drawBearings(o.brg??1);}
-if(s.references||key!==lastOp)drawRefs(o.ref??1);lastOp=key;fr=s.features_rev||'';rr=s.references_rev||'';
-for(const m of Object.values(markers)){m.setStyle({opacity:o.ops??1,fillOpacity:.9*(o.ops??1)});m.bringToFront();}
+if(s.references||key!==lastOp)drawRefs(o);lastOp=key;fr=s.features_rev||'';rr=s.references_rev||'';
+// One opacity per layer: operators and APRS apart.
+for(const m of Object.values(markers)){const op=(m._aprs?o.aprs:o.ops)??o.ops??1;m.setStyle({opacity:op,fillOpacity:.9*op});m.bringToFront();}
 $('msgBox').style.display=s.options&&s.options.messages===false?'none':'';}
 // Top bar: clock, and the state of the link with the server.
 let lastOk=0;
@@ -472,7 +556,8 @@ function linkState(ok){if(ok)lastOk=Date.now();const lost=!ok&&Date.now()-lastOk
 $('linkTxt').textContent=lost?'Liaison perdue'+(lastOk?' depuis '+hm(lastOk):''):(lastOk?'Connecté':'Connexion…');}
 async function refresh(){let r;try{r=await fetch('/api/v0.1/tv/state?fr='+encodeURIComponent(fr)+'&rr='+encodeURIComponent(rr),{headers:{authorization:'Display '+token}});}catch(e){linkState(false);return;}
 if(r.status===401){localStorage.removeItem('sarcade_tv_token');location.reload();return;}if(!r.ok){linkState(false);return;}const s=await r.json();linkState(true);
-$('title').textContent=s.event.name;const pts=[];const now=Date.now();
+$('title').textContent=s.event.name;const pts=[];const now=Date.now();defBase=s.default_base||null;
+const active=s.positions.filter(p=>p.source!=='aprs'&&now-new Date(p.time)<10*60000).map(p=>[p.lat,p.lon]);
 $('nOps').textContent=s.positions.filter(p=>p.source!=='aprs'&&now-new Date(p.time)<10*60000).length;
 $('nAprs').textContent=s.positions.filter(p=>p.source==='aprs').length;
 for(const p of s.positions){const ll=[p.lat,p.lon];pts.push(ll);const k=p.device_id;const aprs=p.source==='aprs';
@@ -482,14 +567,14 @@ const keep=new Set(s.positions.map(p=>p.device_id));for(const k of Object.keys(m
 layers(s);weather(s.weather);
 declutter();
 applyView(s.view);
-if(pts.length&&!map._fitted){map.fitBounds(pts,{padding:[40,40],maxZoom:15});map._fitted=true;}
+const fit=active.length?active:pts;if(fit.length&&!map._fitted){map.fitBounds(fit,{padding:[40,40],maxZoom:15});map._fitted=true;}
 $('msgs').innerHTML=s.messages.slice(-14).reverse().map(m=>'<div class="m '+(m.priority==='immediate'?'i':m.priority==='urgent'?'u':'')+'">'+hm(m.created_at)+' · <b>'+esc(m.sender_id)+'</b> : '+esc(m.body)+'</div>').join('');
 // Red banner chosen by the server (cleared from a phone, or closed by « Fin
 // de détresse »); the SOS pill stays while a distress is not closed.
 const a=s.alert;$('alert').style.display=a?'block':'none';if(a)$('alert').textContent=a.sender_id+' : '+a.body;
 const sos=s.sos||[];$('sos').style.display=sos.length?'inline-block':'none';$('sos').title='Détresse en cours : '+sos.join(', ');}
 function start(){$('pair').style.display='none';$('app').style.display='grid';map=L.map('map',{zoomControl:false}).setView([46.6,2.4],6);
-setBase(null);map.on('zoomend moveend',declutter);drawL=L.layerGroup().addTo(map);brgL=L.layerGroup().addTo(map);refL=L.layerGroup().addTo(map);
+map.on('zoomend moveend',declutter);drawL=L.layerGroup().addTo(map);brgL=L.layerGroup().addTo(map);refL=L.layerGroup().addTo(map);
 map.on('zoomend',()=>map.getContainer().classList.toggle('lowzoom',map.getZoom()<12));map.getContainer().classList.add('lowzoom');tick();setInterval(tick,1000);refresh();setInterval(refresh,10000);}
 if(token)start();else pair();
 </script></body></html>"""

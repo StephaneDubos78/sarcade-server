@@ -32,3 +32,15 @@ Type invalide : 422 (`invalid_layers`, `invalid_opacity`, `invalid_messages`…)
 `GET /api/v0.1/events/{event_id}/displays` donne en plus `owner`, `alert` (bandeau affiché) et `can_clear_alert` (pour l'appelant).
 
 Vérification : `tests/test_tv.py`, `demo/verify_map_features.py`.
+
+## Lot 4 (30 octobre 2026)
+
+- **Opacité par couche** dans `opacity` : `ops`, `aprs`, `draw`, `brg`, `high`, `relay` (10 à 100 %). Une vue de l'ancien format (`ops`, `draw`, `brg`, `ref`) est acceptée : `aprs` reprend `ops`, `high` et `relay` reprennent `ref`.
+- **`from`** (texte, 64 car. au plus) : terminal qui a envoyé la vue ; la TV affiche le petit bandeau « Vue de <terminal> » (texte échappé).
+- **Pas de retour automatique** : la vue reste jusqu'à « Revenir à la vue par défaut » (`view: null`) ou un nouvel envoi. Vue par défaut : cadrage sur les opérateurs actifs (position de moins de 10 min, sinon toutes les stations), fond de carte de l'événement (`default_base` de l'état : `tile_url` https, `attribution` ; `null` si le fond n'est pas en https → OpenStreetMap).
+- **Colonne des messages par écran** : `PUT /api/v0.1/events/{event_id}/displays/{display_id}/messages` `{"messages": bool}`, appliqué tout de suite (main courante « Messages affichés / masqués sur l'écran ») ; un envoi de vue la règle aussi (case « Colonne des messages »). La liste des écrans donne `messages`, `revoked`, `view_from`.
+- **Relevés** : `bearings[].cone_deg` (5 par défaut) ; couleurs alignées sur l'application (406 MHz `#9B4DFF`, 121,5 MHz `#E53935`, exercice 121,375 MHz `#1E88E5`, sinon palette `#3DD6F5`, `#FFB020`, `#4ADE80`, `#FF7AB6`, `#FFE066` selon le nom, même calcul que `searchColor`).
+- **`zones`** : par recherche, `search`, `color`, `exercise`, `bearings` (nombre), `crossings` (`[[lat, lon], …]`) et, s'il y a au moins un croisement, `lat`, `lon`, `radius_m` (au moins 50 m), `label` (« ±426 m · 3 relevés ») — même règle que `crossing` / `probableZone` de l'application. Vide quand la couche Relevés est masquée ; suit l'opacité `brg`. La TV n'affiche plus d'étiquette au bout des relevés : légende en bas à gauche, toujours visible (trait de couleur + signal, badge EXERCICE, zone probable).
+- **Validation depuis le même réseau** : `POST /tv/pair` note l'adresse publique de la TV (`CF-Connecting-IP`, sinon adresse du client). `GET /api/v0.1/tv/nearby` donne aux **PCO et administrateurs** (rôles serveur, e-mail vérifié par Access) les codes en attente derrière la **même adresse publique** que l'appelant : `[{"code", "expires_in"}]` ; liste vide pour les autres. Rien n'est validé par cette route : l'application affiche l'alerte avec le code, l'opérateur confirme, puis `POST /tv/approve` habituel. QR code et saisie du code restent possibles.
+
+Vérification : `tests/test_tv.py`, `demo/verify_tv.py`.
