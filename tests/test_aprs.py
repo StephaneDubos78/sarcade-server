@@ -163,3 +163,27 @@ def test_station_linked_to_a_terminal_only_with_the_exact_ssid():
     assert service._device_for(_Db([pco, tel]), "e", "F4JPO-5") is tel
     assert service._device_for(_Db([pco]), "e", "F4JPO") is pco
     assert service._device_for(_Db([pco]), "e", "F4JPO-0") is pco
+
+
+def test_group_names_unique():
+    """Lot 5 (30 Oct 2026): two groups of the same name are refused."""
+    from fastapi import HTTPException
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from sarcade.api import aprs as aprs_api
+    from sarcade.db.base import Base
+    from sarcade.db.models import AprsGroupRow
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine, tables=[AprsGroupRow.__table__])
+    db = sessionmaker(bind=engine)()
+    g = aprs_api.create_group(aprs_api.GroupIn(actor_id="A", name="ADRASEC 78", callsigns=["F4JPO"]), db, None)
+    with pytest.raises(HTTPException) as e:
+        aprs_api.create_group(aprs_api.GroupIn(actor_id="A", name=" adrasec  78 ", callsigns=[]), db, None)
+    assert e.value.status_code == 409 and e.value.detail == "aprs_group_name_taken"
+    other = aprs_api.create_group(aprs_api.GroupIn(actor_id="A", name="ADRASEC 91", callsigns=[]), db, None)
+    with pytest.raises(HTTPException):
+        aprs_api.update_group(other["id"], aprs_api.GroupIn(actor_id="A", name="Adrasec 78", callsigns=[]), db, None)
+    assert aprs_api.update_group(g["id"], aprs_api.GroupIn(actor_id="A", name="ADRASEC 78", callsigns=[]), db, None)["name"] == "ADRASEC 78"

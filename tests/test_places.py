@@ -111,14 +111,45 @@ async def test_nearest_road_silent_fallback(monkeypatch):
     assert await places.nearest_road(48.8, 1.9) is None
 
 
+def test_to_altitude_and_department():
+    assert places.to_altitude({"elevations": [112.43]}) == 112.4
+    assert places.to_altitude([{"lon": 1.9, "lat": 48.8, "z": 98.0}]) == 98.0
+    assert places.to_altitude({"elevations": [-99999]}) is None
+    assert places.to_altitude({"elevations": []}) is None and places.to_altitude({}) is None
+    assert places.department_of("78490") == "78" and places.department_of("2A004") == "2A"
+    assert places.department_of("97411") == "974" and places.department_of(None) is None
+
+
+@pytest.mark.asyncio
+async def test_altitude_cached_and_silent(monkeypatch):
+    places._alt_cache.clear()
+    calls = []
+
+    def handler(request):
+        calls.append(dict(request.url.params))
+        return httpx.Response(200, json={"elevations": [112.4]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    assert await places.altitude(48.82308, 1.90972, client) == 112.4
+    assert await places.altitude(48.82309, 1.90971, client) == 112.4
+    assert len(calls) == 1 and calls[0]["zonly"] == "true"
+    places._alt_cache.clear()
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+    assert await places.altitude(48.8, 1.9, client) is None
+    monkeypatch.setenv("SARCADE_ALTIMETRY_URL", "")
+    assert await places.altitude(48.8, 1.9) is None
+
+
 def test_api_describe(monkeypatch):
     monkeypatch.setenv("SARCADE_REVERSE_GEOCODER_URL", "")
+    monkeypatch.setenv("SARCADE_ALTIMETRY_URL", "")
     with TestClient(app) as c:
         r = c.get("/api/v0.1/places/describe", params={"lat": 48.82308, "lon": 1.90972, "sectors": 16})
         assert r.status_code == 200
         body = r.json()
         assert body["commune"]["name"] and body["label"].endswith(body["commune"]["name"]) or "centre" in body["label"]
         assert body["road"] is None and body["direction"] in places.SECTORS_16
+        assert body["altitude_m"] is None and body["department"] == "78"
         assert c.get("/api/v0.1/places/describe", params={"lat": 95, "lon": 0}).status_code == 422
         far = c.get("/api/v0.1/places/describe", params={"lat": 45.0, "lon": -30.0}).json()
         assert far["label"] is None and far["commune"] is None

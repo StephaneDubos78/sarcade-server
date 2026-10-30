@@ -11,6 +11,9 @@ INSEE COG 2018), Licence Ouverte Etalab.
 
 * ``SARCADE_REVERSE_GEOCODER_URL``: reverse geocoding endpoint (default the
   IGN Géoplateforme), empty to switch the road lookup off.
+* ``SARCADE_ALTIMETRY_URL``: altimetry endpoint (default the IGN
+  Géoplateforme, RGE ALTI), empty to switch the altitude off (lot 5,
+  fiche « Infos du point », 30 Oct 2026).
 """
 from __future__ import annotations
 
@@ -29,6 +32,8 @@ import httpx
 
 DATA = Path(__file__).with_name("communes.csv.gz")
 DEFAULT_REVERSE_URL = "https://data.geopf.fr/geocodage/reverse"
+DEFAULT_ALTIMETRY_URL = "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json"
+NO_DATA = -99999
 REVERSE_TIMEOUT = 2.5
 CACHE_SECONDS = 24 * 3600
 CACHE_SIZE = 2000
@@ -210,11 +215,76 @@ async def nearest_road(lat: float, lon: float, client: httpx.AsyncClient | None 
     return road
 
 
+# --- altitude (online) -----------------------------------------------------
+_alt_cache: OrderedDict[tuple, tuple[float, float | None]] = OrderedDict()
+
+
+def altimetry_url() -> str:
+    v = os.getenv("SARCADE_ALTIMETRY_URL")
+    return DEFAULT_ALTIMETRY_URL if v is None else v.strip()
+
+
+def to_altitude(payload) -> float | None:
+    """``{"elevations": [123.45]}`` (zonly) or ``[{"z": 123.45}]``; the IGN
+    answers -99999 outside its data (sea, abroad)."""
+    values = payload.get("elevations") if isinstance(payload, dict) else payload
+    if not values:
+        return None
+    v = values[0]
+    if isinstance(v, dict):
+        v = v.get("z")
+    try:
+        z = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if z <= NO_DATA + 1 or math.isnan(z) else round(z, 1)
+
+
+async def altitude(lat: float, lon: float, client: httpx.AsyncClient | None = None) -> float | None:
+    """Ground altitude (m, NGF) from the IGN Géoplateforme, None when unknown
+    or offline (silent fallback, not cached on failure)."""
+    url = altimetry_url()
+    if not url:
+        return None
+    key = (round(lat, 4), round(lon, 4))
+    now = time.monotonic()
+    hit = _alt_cache.get(key)
+    if hit and now - hit[0] < CACHE_SECONDS:
+        _alt_cache.move_to_end(key)
+        return hit[1]
+    own = client is None
+    client = client or httpx.AsyncClient(timeout=REVERSE_TIMEOUT)
+    try:
+        r = await client.get(url, params={"lon": lon, "lat": lat, "resource": "ign_rge_alti_wld",
+                                          "zonly": "true"}, headers={"User-Agent": "SARCADE"})
+        r.raise_for_status()
+        z = to_altitude(r.json())
+    except (httpx.HTTPError, ValueError):
+        return None
+    finally:
+        if own:
+            await client.aclose()
+    _alt_cache[key] = (now, z)
+    while len(_alt_cache) > CACHE_SIZE:
+        _alt_cache.popitem(last=False)
+    return z
+
+
+def department_of(code: str | None) -> str | None:
+    """Department of an INSEE commune code: 78490 → 78, 2A004 → 2A."""
+    if not code or len(code) < 2:
+        return None
+    return code[:3] if code.startswith("97") else code[:2]
+
+
 async def describe(lat: float, lon: float, sectors: int = 8, online: bool = True,
                    client: httpx.AsyncClient | None = None) -> dict:
-    out: dict = {"lat": lat, "lon": lon, "road": None}
+    out: dict = {"lat": lat, "lon": lon, "road": None, "altitude_m": None, "department": None}
     base = describe_offline(lat, lon, sectors)
     out.update(base or {"commune": None, "label": None, "label_en": None})
+    if base:
+        out["department"] = department_of(base["commune"]["code"])
     if online:
         out["road"] = await nearest_road(lat, lon, client)
+        out["altitude_m"] = await altitude(lat, lon, client)
     return out

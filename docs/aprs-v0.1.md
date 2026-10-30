@@ -20,6 +20,7 @@ Serveur APRS-IS réglable dans l'**outil d'administration** (jeton d'administrat
 
 ## Groupes d'indicatifs
 - `GET/POST /api/v0.1/aprs/groups`, `PUT/DELETE /api/v0.1/aprs/groups/{id}` (nom, indicatifs) : créés par l'administrateur de l'organisation.
+  Deux groupes du même nom (casse et espaces ignorés) sont refusés : `409 aprs_group_name_taken` (lot 5, 30 octobre 2026).
 - Un indicatif sans SSID couvre **tous ses SSID** (F4JPO couvre F4JPO-7, F4JPO-9…) ; avec SSID, seulement cette station.
 - Un événement suit des groupes et le PCO peut ajouter des indicatifs : réglages `aprs_groups` et `aprs_callsigns` (`PATCH /events/{id}/settings`). `GET /events/{id}/aprs/callsigns` donne la liste effective. Un événement terminé ne suit plus rien.
 

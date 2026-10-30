@@ -26,6 +26,8 @@ suffix = uuid.uuid4().hex[:4].upper()
 group = c.post(f"{API}/aprs/groups", json={"actor_id": "ADMIN", "name": f"ADRASEC 78 {suffix}",
                                            "callsigns": ["f4jpo", "F1ABC-9"]}).json()
 check(group["callsigns"] == ["F4JPO", "F1ABC-9"], "callsign group created and normalised")
+check(c.post(f"{API}/aprs/groups", json={"actor_id": "ADMIN", "name": f" adrasec 78  {suffix.lower()}",
+                                         "callsigns": []}).status_code == 409, "two groups of the same name refused")
 check(c.post(f"{API}/aprs/groups", json={"actor_id": "ADMIN", "name": "x", "callsigns": ["pas valide"]}).status_code == 422,
       "invalid callsign refused")
 
