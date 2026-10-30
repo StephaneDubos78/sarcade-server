@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 from sarcade.aprs import callsigns as calls
 from sarcade.aprs.links import handle_line
 from sarcade.aprs.service import event_callsigns, runtime
-from sarcade.db.models import AprsGroupRow, EventRow
+from sarcade.db.models import AprsGroupRow, AprsStationClassRow, EventRow
+from sarcade.realtime.manager import manager
 
 from .deps import get_db
 from .roles import require_pco
@@ -97,6 +98,52 @@ def followed_callsigns(event_id: str, db: Session = Depends(get_db)):
     if event is None:
         raise HTTPException(status_code=404, detail="event_not_found")
     return {"callsigns": event_callsigns(db, event)}
+
+
+class StationClassIn(BaseModel):
+    actor_id: str = Field(min_length=1, max_length=64)
+    kind: str = Field(pattern="^(fixed|mobile|auto)$")
+
+
+def _event(db: Session, event_id: str) -> EventRow:
+    event = db.get(EventRow, event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="event_not_found")
+    return event
+
+
+@router.get("/events/{event_id}/aprs/classes")
+def station_classes(event_id: str, db: Session = Depends(get_db)):
+    """Stations classified by hand (fixed or mobile), shared by the event."""
+    _event(db, event_id)
+    rows = db.scalars(select(AprsStationClassRow).where(AprsStationClassRow.event_id == event_id))
+    return {"classes": {r.device_id: r.kind for r in rows}}
+
+
+def set_station_class(db: Session, event_id: str, device_id: str, payload: StationClassIn) -> dict:
+    """Any participant of the event may classify (« auto » removes the
+    choice and lets the application decide again)."""
+    _event(db, event_id)
+    row = db.get(AprsStationClassRow, (event_id, device_id))
+    if payload.kind == "auto":
+        if row is not None:
+            db.delete(row)
+    elif row is None:
+        db.add(AprsStationClassRow(event_id=event_id, device_id=device_id, kind=payload.kind,
+                                   updated_by=payload.actor_id, updated_at=datetime.now(UTC)))
+    else:
+        row.kind, row.updated_by, row.updated_at = payload.kind, payload.actor_id, datetime.now(UTC)
+    db.commit()
+    return {"device_id": device_id, "kind": payload.kind, "updated_by": payload.actor_id}
+
+
+@router.put("/events/{event_id}/aprs/classes/{device_id}")
+async def put_station_class(event_id: str, device_id: str, payload: StationClassIn, db: Session = Depends(get_db)):
+    if not device_id or len(device_id) > 64:
+        raise HTTPException(status_code=422, detail="invalid_device_id")
+    data = set_station_class(db, event_id, device_id, payload)
+    await manager.broadcast(event_id, {"type": "aprs.class.updated", "data": data})
+    return data
 
 
 @router.post("/aprs/frames")
