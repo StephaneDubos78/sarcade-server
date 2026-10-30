@@ -22,6 +22,7 @@ ACTIONS = {"create", "update", "delete"}
 
 MAX_POINTS = 5000
 MAX_LABEL = 160
+DEFAULT_FONT_SIZE = 15.0
 MAX_FUTURE_SKEW = timedelta(minutes=5)
 
 
@@ -108,6 +109,13 @@ def validate_upsert(payload: dict, *, event_id: str, object_id: str) -> dict:
         opacity = _num(opacity, 0.1, 1.0, "invalid_opacity")
         if opacity < 1.0:
             extra["opacity"] = round(opacity, 2)
+    # Font size of a Texte object (card « Dessin, objet Texte : pouvoir changer
+    # la taille de la police »), kept only when it is not the default one.
+    size = payload.get("font_size")
+    if size is not None and kind == "text":
+        size = _num(size, 8, 72, "invalid_font_size")
+        if size != DEFAULT_FONT_SIZE:
+            extra["font_size"] = round(size, 1)
     return {
         **extra,
         "id": object_id,
@@ -275,6 +283,28 @@ def logbook_summary(kind: str, label: str, action: str, *, exercise: bool = Fals
     verb = {"create": "créé", "delete": "supprimé", "restore": "restauré"}.get(action, "modifié")
     text = f"Objet cartographique {verb} : {what}"
     return f"EXERCICE · {text}" if exercise and kind == "bearing" else text
+
+
+# One logbook line for a change of several objects at once (card « Dessin,
+# sélection multiple », proposal 5): « 5 objets supprimés ».
+GROUP_VERBS = {"delete": "supprimés", "move": "déplacés", "style": "modifiés", "duplicate": "dupliqués",
+               "undo": "modifiés (annulation)", "redo": "modifiés (rétablissement)"}
+
+
+def group_of(payload) -> dict | None:
+    """Group tag of an operation (``{"id", "n", "action"}``), or None."""
+    g = payload.get("group") if isinstance(payload, dict) else None
+    if not isinstance(g, dict):
+        return None
+    gid, n, action = g.get("id"), g.get("n"), g.get("action")
+    if not isinstance(gid, str) or not gid or len(gid) > 64 or isinstance(n, bool) or not isinstance(n, int) \
+            or not 2 <= n <= MAX_POINTS or action not in GROUP_VERBS:
+        return None
+    return {"id": gid, "n": n, "action": action}
+
+
+def group_summary(group: dict) -> str:
+    return f"{group['n']} objets {GROUP_VERBS[group['action']]}"
 
 
 def utcnow() -> datetime:

@@ -102,3 +102,21 @@ def test_opacity_is_kept_below_100_percent_only():
     for bad in (0, 1.5, "x", True):
         with pytest.raises(f.InvalidFeature):
             f.validate_upsert(payload(opacity=bad), event_id=EVENT, object_id=FID)
+
+
+def test_text_font_size_is_kept_unless_default():
+    text = dict(kind="text", points=[[48.7, 2.0]], label="PC")
+    assert f.validate_upsert(payload(**text, font_size=24), event_id=EVENT, object_id=FID)["font_size"] == 24.0
+    assert "font_size" not in f.validate_upsert(payload(**text, font_size=15), event_id=EVENT, object_id=FID)
+    assert "font_size" not in f.validate_upsert(payload(font_size=24), event_id=EVENT, object_id=FID)
+    with pytest.raises(f.InvalidFeature, match="invalid_font_size"):
+        f.validate_upsert(payload(**text, font_size=200), event_id=EVENT, object_id=FID)
+
+
+def test_group_of_several_objects_is_one_logbook_line():
+    g = f.group_of({"group": {"id": "g1", "n": 5, "action": "delete"}})
+    assert g == {"id": "g1", "n": 5, "action": "delete"}
+    assert f.group_summary(g) == "5 objets supprimés"
+    assert f.group_of({"group": {"id": "g1", "n": 1, "action": "delete"}}) is None
+    assert f.group_of({"group": {"id": "g1", "n": 3, "action": "explode"}}) is None
+    assert f.group_of({}) is None

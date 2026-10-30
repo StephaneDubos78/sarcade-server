@@ -543,6 +543,14 @@ def _apply_map_feature(db: Session, op, now: datetime) -> tuple[str, int, dict |
 
     result = features.feature_dict(row)
     journal.payload = result
+    group = features.group_of(op.payload)
+    if group is not None:
+        # One line for the whole group, written by its first operation.
+        logbook_action = None
+        if db.scalar(select(LogbookRow.seq).where(LogbookRow.event_id == op.event_id, LogbookRow.kind == "map_feature",
+                                                 LogbookRow.object_id == group["id"])) is None:
+            db.add(LogbookRow(event_id=op.event_id, kind="map_feature", object_id=group["id"],
+                              actor_id=change["updated_by"], time=now, summary=features.group_summary(group)))
     if logbook_action:
         db.add(LogbookRow(event_id=op.event_id, kind="map_feature", object_id=row.id,
             actor_id=change["updated_by"], time=now,

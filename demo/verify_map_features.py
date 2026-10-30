@@ -154,4 +154,20 @@ r = c.post(f"{BASE}/api/v0.1/events/{event}/displays/{disp['id']}/alert/clear")
 check(r.status_code == 200 and c.get(f"{BASE}/api/v0.1/tv/state", headers=TVH).json()["alert"] is None,
       "SOS banner cleared on the screen")
 
+# Lot 8: font size of a Texte, several objects in one logbook line.
+tid = str(uuid.uuid4())
+txt = dict(feature(T0, id=tid, kind="text", points=[[48.7, 2.0]], label="PC"), font_size=24)
+check(sync(dict(op("create", txt), object_id=tid)) == ["accepted"], "text with a font size accepted")
+got = [x for x in listing() if x["id"] == tid]
+check(got and got[0].get("font_size") == 24, "font size kept and served")
+gid = str(uuid.uuid4())
+ids = [str(uuid.uuid4()) for _ in range(3)]
+check(sync(*[dict(op("create", feature(T0, id=i)), object_id=i) for i in ids]) == ["accepted"] * 3, "3 objects created")
+grp = {"id": gid, "n": 3, "action": "delete"}
+dels = [dict(op("delete", {"id": i, "event_id": event, "updated_by": "TERRAIN-01",
+                           "updated_at": iso(T0 + timedelta(minutes=9)), "group": grp}), object_id=i) for i in ids]
+check(sync(*dels) == ["accepted"] * 3, "3 objects deleted together")
+log = [x["summary"] for x in c.get(f"{BASE}/api/v0.1/events/{event}/logbook").json() if x["object_id"] in [gid, *ids]]
+check(log.count("3 objets supprimés") == 1 and not any("supprimé :" in x for x in log), "one logbook line for the group")
+
 print("PASS: map feature synchronisation follows ADR-001")
