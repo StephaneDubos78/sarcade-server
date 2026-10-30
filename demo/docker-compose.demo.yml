@@ -26,6 +26,7 @@ services:
       SARCADE_METEOFRANCE_API_KEY: demo
       SARCADE_VALHALLA_URL: http://services-stub:8080
       SARCADE_REVERSE_GEOCODER_URL: http://services-stub:8080/geocodage/reverse
+      SARCADE_ALTIMETRY_URL: http://services-stub:8080/altimetrie/elevation.json
       # Updates and security: releases API and SIEM collector stand-ins.
       SARCADE_RELEASES_URL: http://services-stub:8080/releases/latest
       SARCADE_ADMIN_TOKEN: demo-admin-token

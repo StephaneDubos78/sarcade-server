@@ -111,6 +111,9 @@ jobs:
       - name: Verify the road graph for navigation on the device and the navigation app setting
         working-directory: demo
         run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_offline_routing.py"
+      - name: Verify the server diagnostics (state, components, resources)
+        working-directory: demo
+        run: docker compose -f docker-compose.demo.yml run --rm --entrypoint sh simulator -c "pip install -q httpx && python /demo/verify_diagnostics.py"
       - name: Verify HTTPS through the reverse proxy (option B, local CA)
         working-directory: demo
         run: |

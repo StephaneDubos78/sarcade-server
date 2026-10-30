@@ -44,6 +44,17 @@ def _clean(payload: GroupIn) -> list[str]:
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+def _check_unique_name(db: Session, name: str, own_id: str | None = None) -> str:
+    """Two groups of the same name are refused (lot 5, 30 Oct 2026: two
+    « ADRASEC 78 » groups, one inside the other); case and spaces ignored."""
+    clean = " ".join(name.split())
+    key = clean.casefold()
+    for row in db.scalars(select(AprsGroupRow)):
+        if row.id != own_id and " ".join((row.name or "").split()).casefold() == key:
+            raise HTTPException(status_code=409, detail="aprs_group_name_taken")
+    return clean
+
+
 @router.get("/aprs/groups")
 def list_groups(db: Session = Depends(get_db)):
     return [group_dict(r) for r in db.scalars(select(AprsGroupRow).order_by(AprsGroupRow.name))]
@@ -52,7 +63,8 @@ def list_groups(db: Session = Depends(get_db)):
 @router.post("/aprs/groups", status_code=201)
 def create_group(payload: GroupIn, db: Session = Depends(get_db), _pco=Depends(require_pco)):
     now = datetime.now(UTC)
-    row = AprsGroupRow(id=str(uuid.uuid4()), name=payload.name.strip(), callsigns=_clean(payload),
+    name = _check_unique_name(db, payload.name)
+    row = AprsGroupRow(id=str(uuid.uuid4()), name=name, callsigns=_clean(payload),
                        created_at=now, updated_at=now, updated_by=payload.actor_id)
     db.add(row)
     db.commit()
@@ -64,7 +76,7 @@ def update_group(group_id: str, payload: GroupIn, db: Session = Depends(get_db),
     row = db.get(AprsGroupRow, group_id)
     if row is None:
         raise HTTPException(status_code=404, detail="aprs_group_not_found")
-    row.name, row.callsigns = payload.name.strip(), _clean(payload)
+    row.name, row.callsigns = _check_unique_name(db, payload.name, group_id), _clean(payload)
     row.updated_at, row.updated_by = datetime.now(UTC), payload.actor_id
     db.commit()
     return group_dict(row)

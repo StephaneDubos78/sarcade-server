@@ -117,6 +117,8 @@ class Handler(BaseHTTPRequestHandler):
                     "coordinates": [1.9097, 48.8232]}, "properties": {"street": "Rue des Côteaux de Chatron",
                     "label": "Rue des Côteaux de Chatron 78640 Saint-Germain-de-la-Grange",
                     "city": "Saint-Germain-de-la-Grange", "postcode": "78640"}}]}
+        elif path == "/altimetrie/elevation.json":
+            body = {"elevations": [112.4]}
         elif path == "/siem/received":
             body = list(SIEM_RECEIVED)
         else:

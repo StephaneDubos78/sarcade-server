@@ -60,6 +60,8 @@ from . import tv as tv_api
 from sarcade.wakeup import service as wakeup_service
 from sarcade.events import contacts as event_contacts
 from . import signals as signals_api
+from . import diagnostics as diagnostics_api
+from sarcade import diagnostics
 
 log = logging.getLogger("sarcade.sync")
 
@@ -90,6 +92,7 @@ async def no_store_for_api(request, call_next):
     """API answers are live data: no cache, browser or proxy, may keep them.
     A Cloudflare cache rule once kept the change feed for hours and clients
     stopped seeing new messages (25 October 2026)."""
+    diagnostics.seen_cloudflare(request.headers)
     response = await call_next(request)
     if request.url.path.startswith("/api/") or request.url.path == "/health":
         response.headers["Cache-Control"] = "no-store"
@@ -128,6 +131,7 @@ app.include_router(file_folders_api.router)
 app.include_router(roles_api.router)
 app.include_router(tv_api.router)
 app.include_router(signals_api.router)
+app.include_router(diagnostics_api.router)
 
 
 @app.get("/health")
