@@ -22,7 +22,7 @@ MAX_SIGNALS = 20
 MAX_LABEL = 60
 INITIAL = [
     {"label": "Balise de détresse réelle", "frequency_mhz": 121.5, "exercise": False, "hidden": False},
-    {"label": "Balise d'exercice", "frequency_mhz": 121.375, "exercise": True, "hidden": False},
+    {"label": "Balise d’exercice", "frequency_mhz": 121.375, "exercise": True, "hidden": False},
     {"label": "Cospas-Sarsat", "frequency_mhz": 406.0, "exercise": False, "hidden": False},
 ]
 
