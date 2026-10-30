@@ -66,8 +66,13 @@ def message(token: str, data: dict[str, str], high: bool, ios: bool = False) -> 
     msg = {"token": token, "data": data,
            "android": {"priority": "high" if high else "normal", "ttl": "3600s"}}
     if ios:
+        headers = {"apns-priority": "10" if high else "5", "apns-push-type": "alert"}
+        if data.get("tag"):
+            # One notification per message or distress: a new alert with the
+            # same collapse id replaces the previous one on the iPhone.
+            headers["apns-collapse-id"] = data["tag"][:64]
         msg["apns"] = {
-            "headers": {"apns-priority": "10" if high else "5", "apns-push-type": "alert"},
+            "headers": headers,
             "payload": {"aps": {"alert": {"title": title(data), "body": "Ouvrez SARCADE pour le lire."},
                                 "sound": "default", "content-available": 1,
                                 **({"interruption-level": "time-sensitive"} if high else {})}},

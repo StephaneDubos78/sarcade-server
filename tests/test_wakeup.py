@@ -90,3 +90,20 @@ def test_iphone_gets_a_generic_alert_without_content():
     assert "apns" not in fcm.message("tok", {"type": "wake"}, True)["message"]
     assert fcm.title({"kind": "test"}) == "SARCADE : réveil reçu"
 
+
+
+def test_one_notification_per_message_and_per_distress():
+    """Card « Détresse, une seule notification » (30 Oct 2026, 12 h 45)."""
+    assert service.signal("ev1", "urgent", tag="m1")["tag"] == "m1"
+    # Same key as the application (notification_keys.dart), no callsign in it.
+    assert service.sos_key("ev1", "PCO-demo") == "sos-e520f6f9"
+    distress = {"id": "m1", "sender_id": "PCO-demo", "recipient_ids": [], "priority": "immediate",
+                "body": "🆘 DÉTRESSE — PCO-demo — position 48.1, 2.3"}
+    end = {"id": "m2", "sender_id": "PCO-demo", "recipient_ids": [], "priority": "urgent",
+           "body": "Fin de détresse — PCO-demo"}
+    assert service.notification_tag("ev1", distress) == service.notification_tag("ev1", end) == "sos-e520f6f9"
+    assert service.notification_tag("ev1", {"id": "m3", "body": "Bonjour", "priority": "routine"}) == "m3"
+    assert service.notification_tag("ev1", {**distress, "recipient_ids": ["TEL-01"]}) == "m1"
+    msg = fcm.message("tok", service.signal("ev1", "immediate", tag="sos-e520f6f9"), True, ios=True)["message"]
+    assert msg["apns"]["headers"]["apns-collapse-id"] == "sos-e520f6f9"
+    assert "apns-collapse-id" not in fcm.message("tok", service.signal("ev1", "immediate"), True, ios=True)["message"]["apns"]["headers"]
