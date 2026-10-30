@@ -189,7 +189,7 @@ def _logbook_and_notices(db, event_id, kind, row, before, was_deleted, change, r
     if kind == "move_order" and row.deleted_at is None:
         d = row.data
         target = d.get("target_id")
-        label = (d.get("destination") or {}).get("label") or "point désigné"
+        label = (d.get("destination") or {}).get("label") or routes.DEFAULT_ORDER_LABEL
         status = d.get("status")
         if before is None:
             log(f"Ordre de déplacement : {target} vers « {label} »")

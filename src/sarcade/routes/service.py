@@ -239,9 +239,13 @@ def move_order_allowed(before: dict | None, created_by: str | None, change: dict
             and change.get("note", "") == before.get("note", ""))
 
 
+# Default name of a move order destination (card « Fond et affichage », 30 Oct 2026).
+DEFAULT_ORDER_LABEL = "Point de la carte"
+
+
 def move_order_text(data: dict) -> str:
     d = data.get("destination") or {}
-    label = d.get("label") or "point désigné"
+    label = d.get("label") or DEFAULT_ORDER_LABEL
     text = f"📍 Ordre de déplacement : rejoindre « {label} » ({d.get('lat', 0):.5f}, {d.get('lon', 0):.5f})"
     return f"{text} — {data['note']}" if data.get("note") else text
 

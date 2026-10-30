@@ -49,3 +49,9 @@ def test_the_operator_only_answers():
 def test_move_orders_are_journaled_by_the_sync():
     from sarcade.sync.service import VALID_TYPES
     assert "move_order" in VALID_TYPES
+
+
+def test_move_order_default_label_is_point_de_la_carte():
+    text = r.move_order_text({"destination": {"lat": 48.0, "lon": 2.0}})
+    assert "« Point de la carte »" in text
+    assert r.DEFAULT_ORDER_LABEL == "Point de la carte"
