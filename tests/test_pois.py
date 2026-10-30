@@ -115,3 +115,29 @@ def test_invalid_label_is_rejected():
 
 def test_poi_is_still_a_sync_type():
     assert "poi" in VALID_TYPES
+
+
+def test_icon_values():
+    assert pois.clean_icon(None) is None and pois.clean_icon("") is None
+    assert pois.clean_icon("helipad") == "helipad" and len(pois.ICONS) >= 12
+    with pytest.raises(pois.InvalidPoi):
+        pois.clean_icon("skull")
+    with pytest.raises(pois.InvalidPoi):
+        pois.clean_icon(3)
+
+
+def test_icon_change_keeps_the_name():
+    db = FakeDb(row())
+    status, _, msg = api._apply_poi_change(db, op("update", icon="parking", updated_by="TEL-02"), NOW, False)
+    assert status == "accepted" and msg["data"]["icon"] == "parking" and msg["data"]["label"] == "Point haut"
+
+
+def test_rename_keeps_the_icon():
+    db = FakeDb(row(icon="water"))
+    _, _, msg = api._apply_poi_change(db, op("update", label="Gué", updated_by="TEL-02"), NOW, False)
+    assert msg["data"]["icon"] == "water" and msg["data"]["label"] == "Gué"
+
+
+def test_invalid_icon_is_rejected():
+    with pytest.raises(api.SyncRejected):
+        api._apply_poi_change(FakeDb(row()), op("update", icon="skull", updated_by="TEL-02"), NOW, False)

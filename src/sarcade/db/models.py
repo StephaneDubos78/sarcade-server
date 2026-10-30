@@ -83,6 +83,8 @@ class POIRow(Base):
     updated_by: Mapped[str | None] = mapped_column(String(64))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Shape of the icon (30 Oct 2026), None = default pin.
+    icon: Mapped[str | None] = mapped_column(String(32))
 
 
 

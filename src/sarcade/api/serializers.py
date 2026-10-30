@@ -22,7 +22,7 @@ def poi_dict(row: POIRow) -> dict:
         "id": row.id, "event_id": row.event_id, "kind": row.kind,
         "label": row.label, "lat": p.y, "lon": p.x,
         "created_at": row.created_at, "version": row.version,
-        "created_by": row.created_by, "color": row.color,
+        "created_by": row.created_by, "color": row.color, "icon": row.icon,
         "updated_by": row.updated_by, "updated_at": row.updated_at,
     }
 

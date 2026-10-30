@@ -23,9 +23,9 @@ Le flux est strictement isolé par event_id. À ce stade, l'authentification Web
 Un client abonné à un événement reçoit immédiatement une nouvelle position ou un nouveau POI après validation et persistance en base.
 
 ## Points d'intérêt (29 octobre 2026)
-- Champs : `id`, `event_id`, `kind`, `label`, `lat`, `lon`, `created_at`, `created_by` (auteur), `color` (ARGB, couleur de dessin de l'auteur), `version`, `updated_by`, `updated_at`.
+- Champs : `id`, `event_id`, `kind`, `label`, `lat`, `lon`, `created_at`, `created_by` (auteur), `color` (ARGB, couleur de dessin de l'auteur), `icon` (forme de l'icône, 30 octobre 2026 : `pin`, `gathering`, `command_post`, `danger`, `parking`, `water`, `helipad`, `vehicle`, `viewpoint`, `medical`, `radio`, `shelter`, `flag` ; absent = épingle), `version`, `updated_by`, `updated_at`.
 - Création : `POST …/pois` ou synchronisation `object_type = poi`, `action = create` ; l'auteur est `created_by` (à défaut `updated_by`).
-- Modification : synchronisation `action = update`, charge `{label, updated_by}` ; seul le nom change.
+- Modification : synchronisation `action = update`, charge `{label?, icon?, updated_by}` ; seuls le nom et l'icône changent (un champ absent est conservé, une icône inconnue est refusée).
 - Suppression : synchronisation `action = delete`, charge `{updated_by}` ; une ligne en main courante (« Point d'intérêt « … » supprimé »). Le point disparaît de `GET …/pois`.
 - Droits : l'auteur ou le PCO (identifiant `PCO`/`PCO-…` ou rôle PCO de l'adresse vérifiée par Cloudflare Access) ; sinon `rejected` et entrée au journal de sécurité. Un point sans auteur (antérieur au 29 octobre) : PCO seulement.
 - Le flux de changements (`…/sync/changes`) porte l'état résultant ; une suppression porte `deleted: true`. Une suppression d'un point déjà supprimé répond `conflict`.

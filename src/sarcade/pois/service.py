@@ -11,6 +11,10 @@ from sarcade.groups.service import is_pco
 
 ACTIONS = ("create", "update", "delete")
 MAX_LABEL = 160
+# Shape of the icon (card « Points d'intérêt, création claire et icônes »,
+# 30 Oct 2026): a simple set; None = the default pin (older points).
+ICONS = ("pin", "gathering", "command_post", "danger", "parking", "water", "helipad",
+         "vehicle", "viewpoint", "medical", "radio", "shelter", "flag")
 
 
 class InvalidPoi(ValueError):
@@ -29,6 +33,14 @@ def clean_color(value) -> int | None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 0xFFFFFFFF:
         raise InvalidPoi("invalid_color")
+    return value
+
+
+def clean_icon(value) -> str | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or value not in ICONS:
+        raise InvalidPoi("invalid_icon")
     return value
 
 
@@ -60,7 +72,7 @@ def state(row) -> dict:
     p = to_shape(row.point)
     out = {"id": row.id, "event_id": row.event_id, "kind": row.kind, "label": row.label,
            "lat": p.y, "lon": p.x, "created_at": _iso(row.created_at), "version": row.version,
-           "created_by": row.created_by, "color": row.color,
+           "created_by": row.created_by, "color": row.color, "icon": row.icon,
            "updated_by": row.updated_by, "updated_at": _iso(row.updated_at)}
     if row.deleted_at is not None:
         out["deleted"] = True
@@ -70,5 +82,5 @@ def state(row) -> dict:
 
 def logbook_summary(label: str | None, action: str) -> str:
     name = f" « {label} »" if label else ""
-    return {"delete": f"Point d'intérêt{name} supprimé", "update": f"Point d'intérêt renommé{name}"}.get(
+    return {"delete": f"Point d'intérêt{name} supprimé", "update": f"Point d'intérêt modifié{name}"}.get(
         action, f"Point d'intérêt{name} créé")
