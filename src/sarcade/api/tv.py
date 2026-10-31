@@ -471,6 +471,22 @@ def approve_page(db: Session = Depends(get_db)):
 _LOGO = Path(__file__).with_name("tv_logo.png")
 
 
+# QR code (qrcodejs 1.0.0) and map (Leaflet 1.9.4) served by SARCADE, not
+# by public CDNs: TVs on a network without Internet or behind a filter
+# (card « TV Samsung : ni QR code ni code », 31 Oct 2026).
+_STATIC = Path(__file__).with_name("tv_static")
+_STATIC_TYPES = {".js": "text/javascript", ".css": "text/css", ".png": "image/png"}
+_STATIC_FILES = {p.relative_to(_STATIC).as_posix(): p for p in _STATIC.rglob("*") if p.suffix in _STATIC_TYPES}
+
+
+@router.get("/tv/static/{name:path}")
+def tv_static(name: str):
+    path = _STATIC_FILES.get(name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    return FileResponse(path, media_type=_STATIC_TYPES[path.suffix], headers={"Cache-Control": "public, max-age=604800"})
+
+
 @router.get("/tv/logo.png")
 def tv_logo():
     return FileResponse(_LOGO, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
@@ -506,7 +522,7 @@ document.getElementById('r').textContent=r.ok?'C\\u2019est fait : la TV affiche 
 _TV = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
 <title>SARCADE · affichage</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/tv/static/leaflet.css">
 <style>html,body{margin:0;height:100%;overflow:hidden;background:#03152b;color:#eef3f9;-webkit-text-size-adjust:100%;text-size-adjust:100%;
 font-family:Roboto,'Noto Sans','Helvetica Neue',Arial,Helvetica,sans-serif;letter-spacing:normal}
 #pair{display:grid;grid-template-columns:auto auto;justify-content:center;align-items:center;gap:8vw;height:100%;padding:0 8vw;box-sizing:border-box;
@@ -560,12 +576,29 @@ background:rgba(3,21,43,.92);color:#fff;font-size:min(14vw,22vh);font-weight:800
 <div id="hint"></div></div><div id="qr"></div></div>
 <div id="app"><header><div class="hlogo"><img src="/tv/logo.png" alt="SARCADE"></div><div id="title"></div><div class="stats"><span><b id="nOps">0</b> opérateurs actifs</span><span><b id="nAprs">0</b> stations APRS</span><span id="link"><span class="dot"></span><span id="linkTxt">Connexion…</span></span></div><span id="sos" title="Détresse en cours">SOS</span><div id="wx"></div><div id="sun"></div><div id="clock">--:--</div></header><div id="mapBox"><div id="map"></div><div id="legend"></div><div id="from"></div></div><aside><div id="msgBox"><h2>Messages</h2><div id="msgs"></div></div></aside></div>
 <div id="alert"></div><div id="ident"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+// Plain old script: if the page script cannot run on this browser (too old
+// TV), say so after 10 s instead of a silent screen with « ······ ».
+var sarcadeStarted=false;
+setTimeout(function(){
+  if(window.sarcadeStarted)return;
+  var m=navigator.userAgent.match(/Chrome\\/(\\d+)/);
+  document.getElementById('hint').textContent='Le navigateur de cet écran n\\u2019a pas pu lancer SARCADE'+(m?' (moteur Chrome '+m[1]+')':'')+
+    '. Mettez à jour le navigateur de la TV, ou branchez un autre appareil (clé HDMI, ordinateur).';
+},10000);
+</script>
+<script src="/tv/static/qrcode.min.js"></script>
+<script src="/tv/static/leaflet.js"></script>
+<script>
+window.sarcadeStarted=true;
 const $=id=>document.getElementById(id);let token=localStorage.getItem('sarcade_tv_token');let map,markers={};
 const appHost=location.hostname.replace(/^tv\\./,'app.');
-const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Old TV browsers (Samsung Tizen, older LG webOS: Chromium 56 and later):
+// syntax of 2017 only in this page, no nullish operator, no optional
+// chaining, no object spread (card « TV Samsung : ni QR code ni code »,
+// 31 Oct 2026); tests/test_tv_page_syntax.py checks it.
+function nz(){for(var i=0;i<arguments.length;i++){var v=arguments[i];if(v!==null&&v!==undefined)return v;}return undefined;}
+const esc=v=>String(nz(v,'')).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // Station name without the technical prefix: callsign for APRS, else the terminal.
 function label(p){return p.callsign||String(p.device_id||'').replace(/^aprs:/,'');}
 // Labels that would overlap are hidden (operators first, then APRS), recomputed on zoom.
@@ -619,15 +652,15 @@ $('sun').innerHTML=w&&w.sunrise&&w.sunset?'<b>↑</b> '+hm(w.sunrise)+'<br><b>�
 // Layers of the view: drawings, bearings, reference sites; sent again by
 // the server only when they changed (revisions fr / rr).
 let fr='',rr='',lastOp='',drawL,brgL,refL,dData=[],bData=[],rData=[],zData=[];
-function argb(c){c=Number(c)>>>0;return{col:'#'+(c&0xFFFFFF).toString(16).padStart(6,'0'),a:((c>>>24)&255)/255||1};}
+function argb(c){c=Number(c)>>>0;return{col:'#'+('00000'+(c&0xFFFFFF).toString(16)).slice(-6),a:((c>>>24)&255)/255||1};}
 function arrowHead(pts){const a=pts[pts.length-2],b=pts[pts.length-1],k=Math.cos(b[0]*Math.PI/180)||1;
 const dx=(b[1]-a[1])*k,dy=b[0]-a[0],h=Math.hypot(dx,dy)*0.2,t=Math.atan2(dy,dx);
 const p=s=>[b[0]+h*Math.sin(t+s),b[1]+h*Math.cos(t+s)/k];return[p(2.6),b,p(-2.6)];}
-function drawFeatures(op){drawL.clearLayers();for(const f of dData){const c=argb(f.color),o=(f.opacity??1)*op*c.a,pts=f.points||[];
+function drawFeatures(op){drawL.clearLayers();for(const f of dData){const c=argb(f.color),o=nz(f.opacity,1)*op*c.a,pts=f.points||[];
 if(!pts.length)continue;const st={color:c.col,weight:f.stroke_width||2,opacity:o,fillOpacity:o*0.25};let l;
-if(f.kind==='point')l=L.circleMarker(pts[0],{...st,radius:6,fillOpacity:o});
+if(f.kind==='point')l=L.circleMarker(pts[0],Object.assign({},st,{radius:6,fillOpacity:o}));
 else if(f.kind==='text')l=L.marker(pts[0],{interactive:false,icon:L.divIcon({className:'txt',iconSize:null,html:'<span style="color:'+c.col+';opacity:'+o+'">'+esc(f.label)+'</span>'})});
-else if(f.kind==='circle')l=L.circle(pts[0],{...st,radius:Number(f.radius_m)||1});
+else if(f.kind==='circle')l=L.circle(pts[0],Object.assign({},st,{radius:Number(f.radius_m)||1}));
 else if(f.kind==='rectangle'&&pts.length>1)l=L.rectangle([pts[0],pts[1]],st);
 else if(f.kind==='zone')l=L.polygon(pts,st);
 else if(f.kind==='arrow'&&pts.length>1)l=L.featureGroup([L.polyline(pts,st),L.polyline(arrowHead(pts),st)]);
@@ -640,11 +673,11 @@ return[p2*180/Math.PI,(l1+Math.atan2(Math.sin(t)*Math.sin(d)*Math.cos(p1),Math.c
 // 121,5 red, exercise 121,375 blue); no label at the end of a bearing
 // (30 Oct 2026): the legend bottom left names the signals.
 const col6=c=>/^#[0-9a-f]{6}$/i.test(c||'')?c:'#3DD6F5';
-function drawBearings(op){brgL.clearLayers();for(const b of bData){const col=col6(b.color),len=Number(b.length_m)||10000,cone=Number(b.cone_deg??5);
+function drawBearings(op){brgL.clearLayers();for(const b of bData){const col=col6(b.color),len=Number(b.length_m)||10000,cone=Number(nz(b.cone_deg,5));
 const st={color:col,weight:3,opacity:op},end=dest(b.lat,b.lon,b.azimuth_deg,len);
 if(cone>0)L.polygon([[b.lat,b.lon],dest(b.lat,b.lon,(b.azimuth_deg-cone+360)%360,len),dest(b.lat,b.lon,(b.azimuth_deg+cone)%360,len)],
 {color:col,weight:1,opacity:.35*op,fillColor:col,fillOpacity:.10*op,interactive:false}).addTo(brgL);
-L.circleMarker([b.lat,b.lon],{...st,radius:4,fillOpacity:op}).addTo(brgL);L.polyline([[b.lat,b.lon],end],st).addTo(brgL);}
+L.circleMarker([b.lat,b.lon],Object.assign({},st,{radius:4,fillOpacity:op})).addTo(brgL);L.polyline([[b.lat,b.lon],end],st).addTo(brgL);}
 // Probable zone and crossings of each search, computed by the server.
 for(const z of zData){const col=col6(z.color);for(const c of z.crossings||[])L.circleMarker(c,{radius:4,color:col,weight:1,opacity:op,fillOpacity:op}).addTo(brgL);
 if(z.lat==null)continue;L.circle([z.lat,z.lon],{radius:Number(z.radius_m)||50,color:'#ff4d5e',weight:2,opacity:op,fillColor:'#ff4d5e',fillOpacity:.13*op,interactive:false}).addTo(brgL);
@@ -656,7 +689,7 @@ function legend(){const by={};for(const b of bData){const k=b.search||'';by[k]=b
 const keys=Object.keys(by).sort();const zone=zData.some(z=>z.lat!=null);
 $('legend').innerHTML=keys.map(k=>'<div><i style="background:'+by[k].color+'"></i>'+esc(k||'Sans signal')+(by[k].ex?' <span class="ex">EXERCICE</span>':'')+'</div>').join('')
 +(zone?'<div><i class="zr" style="border-color:#ff4d5e"></i>Zone probable</div>':'');$('legend').style.display=keys.length?'block':'none';}
-function drawRefs(o){refL.clearLayers();for(const r of rData){const hp=r.category==='HIGH_POINT',c=hp?'#7ddc5a':'#c77dff',op=(hp?o.high:o.relay)??o.ref??1;
+function drawRefs(o){refL.clearLayers();for(const r of rData){const hp=r.category==='HIGH_POINT',c=hp?'#7ddc5a':'#c77dff',op=nz(hp?o.high:o.relay,o.ref,1);
 L.circleMarker([r.lat,r.lon],{radius:5,color:c,weight:2,opacity:op,fillOpacity:op*0.6})
 .bindTooltip(esc(r.callsign||r.name),{permanent:true,direction:'right',className:'rlab'}).addTo(refL);}}
 // Day / night chosen by the server (mode pushed with the view, else sunrise
@@ -675,10 +708,10 @@ function identify(i){if(!i||i.id===identId)return;identId=i.id;$('ident').textCo
 setTimeout(()=>{$('ident').style.display='none';},(Number(i.seconds)||5)*1000);}
 function layers(s){const o=(s.options&&s.options.opacity)||{},key=JSON.stringify(o);
 if(s.drawings)dData=s.drawings;if(s.bearings){bData=s.bearings;zData=s.zones||[];}if(s.references)rData=s.references;
-if(s.drawings||s.bearings||key!==lastOp){drawFeatures(o.draw??1);drawBearings(o.brg??1);}
+if(s.drawings||s.bearings||key!==lastOp){drawFeatures(nz(o.draw,1));drawBearings(nz(o.brg,1));}
 if(s.references||key!==lastOp)drawRefs(o);lastOp=key;fr=s.features_rev||'';rr=s.references_rev||'';
 // One opacity per layer: operators and APRS apart.
-for(const m of Object.values(markers)){const op=(m._aprs?o.aprs:o.ops)??o.ops??1;m.setStyle({opacity:op,fillOpacity:.9*op});m.bringToFront();}
+for(const m of Object.values(markers)){const op=nz(m._aprs?o.aprs:o.ops,o.ops,1);m.setStyle({opacity:op,fillOpacity:.9*op});m.bringToFront();}
 look(s);}
 // Top bar: clock, and the state of the link with the server.
 let lastOk=0;

@@ -29,11 +29,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9", "pytest-asyncio>=0.24,<1", "httpx>=0.27,<1", "pip-audit>=2.7,<3"]
+dev = ["pytest>=8,<9", "pytest-asyncio>=0.24,<1", "httpx>=0.27,<1", "pip-audit>=2.7,<3", "esprima>=4.0.1,<5"]
 
 [tool.setuptools.package-data]
 # Embedded list of the French communes (readable location, offline).
-sarcade = ["places/communes.csv.gz", "api/*.png"]
+sarcade = ["places/communes.csv.gz", "api/*.png", "api/tv_static/*.js", "api/tv_static/*.css", "api/tv_static/*-LICENSE", "api/tv_static/images/*.png"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
