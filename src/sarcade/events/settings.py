@@ -44,6 +44,9 @@ DEFAULT_SETTINGS: dict = {
     "department": None,
     # Base map shown by default for the event (note « Choix du fond de carte »).
     "basemap": "osm",
+    # Modules enabled for the event (sarcade.modules, 31 Oct 2026); older
+    # events keep ADRASEC, new ones get the modules of their event model.
+    "modules": ["adrasec"],
 }
 
 _BOOL_KEYS = {"low_bandwidth", "tracking_required", "aprs_tx_rf"}
@@ -86,6 +89,12 @@ def apply_patch(stored: dict | None, patch: dict) -> dict:
                                       or not -_COORD_KEYS[key] <= value <= _COORD_KEYS[key]):
                 raise InvalidSettings(f"invalid_value:{key}")
             value = float(value) if value is not None else None
+        elif key == "modules":
+            from sarcade.modules import InvalidModules, clean
+            try:
+                value = clean(value)
+            except InvalidModules as exc:
+                raise InvalidSettings(str(exc)) from exc
         elif key == "basemap":
             if not (isinstance(value, str) and 1 <= len(value) <= 40):
                 raise InvalidSettings("invalid_value:basemap")
@@ -184,6 +193,10 @@ def logbook_summaries(old: dict | None, new: dict) -> list[str]:
         lines.append(f"Météo : vigilance suivie pour le département {after['department']}")
     if before["basemap"] != after["basemap"]:
         lines.append(f"Fond de carte par défaut : {after['basemap']}")
+    if before["modules"] != after["modules"]:
+        from sarcade.modules import MODULES
+        names = ", ".join(MODULES[m]["label"] for m in after["modules"]) or "aucun (Core seul)"
+        lines.append(f"Modules de l'événement : {names}")
     if before["sync_alert_minutes"] != after["sync_alert_minutes"]:
         lines.append(f"Alerte de synchronisation après {after['sync_alert_minutes']} min")
     return lines

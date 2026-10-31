@@ -83,7 +83,7 @@ check(message("TEL-01", g["Tous"]["id"]) == "accepted", "an operator writes in T
 check(message("TEL-01", gid) == "rejected", "nobody writes in an archived group")
 
 log = [x["summary"] for x in c.get(f"{E}/logbook").json()]
-for line in ("Groupes par défaut ADRASEC créés", "Groupe de communication créé : « Recherche nord »",
+for line in ("Canaux de base créés (« Tous », « Diffusion PCO »)", "Groupe de communication créé : « Recherche nord »",
              "Groupe de communication archivé : « Recherche nord »"):
     check(line in log, f"logbook: {line}")
 print("groups: all checks passed")

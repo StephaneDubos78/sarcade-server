@@ -6,6 +6,8 @@ class EventCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     kind: str
     summary: str | None = Field(default=None, max_length=1000)
+    # Modules of the event (sarcade.modules); None: those of its kind.
+    modules: list[str] | None = None
 
 
 class EventOut(EventCreate):
