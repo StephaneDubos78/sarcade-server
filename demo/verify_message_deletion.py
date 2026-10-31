@@ -37,10 +37,12 @@ def sync(op):
     return c.post(f"{API}/sync", json=[op]).json()[0]
 
 
-def send(sender, when=NOW, attachments=()):
+def send(sender, when=NOW, attachments=(), reply_to=None):
     mid = str(uuid.uuid4())
     p = {"id": mid, "event_id": event, "sender_id": sender, "recipient_ids": [], "priority": "routine",
          "body": "Texte secret", "created_at": iso(when), "attachments": list(attachments)}
+    if reply_to:
+        p["reply_to"] = reply_to
     r = sync({"operation_id": str(uuid.uuid4()), "event_id": event, "object_id": mid, "object_type": "message",
               "action": "create", "client_time": iso(when), "payload": p})
     check(r["status"] == "accepted", f"message from {sender} accepted")
@@ -73,4 +75,9 @@ check(sum(1 for e in log if e["kind"] == "message_deleted") == 2, "deletions in 
 check(all("Texte secret" not in e["summary"] for e in log), "no content in the logbook")
 kept = c.get(f"{API}/events/{event}/messages/deleted").json()
 check(len(kept) == 2 and kept[0]["body"] == "Texte secret", "original kept for the PCO")
-print("message deletion: all checks passed")
+# Reply to a message (31 Oct 2026).
+r1 = send("TEL-02", reply_to=old)
+check({m["id"]: m for m in c.get(f"{API}/events/{event}/messages").json()}[r1].get("reply_to") == old, "reply keeps the quoted message")
+r2 = send("TEL-02", reply_to="unknown-id")
+check("reply_to" not in {m["id"]: m for m in c.get(f"{API}/events/{event}/messages").json()}[r2], "unknown quoted message dropped")
+print("message deletion and reply: all checks passed")

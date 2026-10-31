@@ -34,3 +34,6 @@ Des pièces jointes mal formées font rejeter le message. La main courante indiq
 - Temps réel : `message.deleted` avec `{id, event_id, deleted, deleted_at, deleted_by, deleted_by_pco}` ; le flux de changements porte la même charge sur l'opération `delete`.
 - Traçabilité : le texte et les pièces jointes d'origine restent sur le serveur ; `GET /events/{id}/messages/deleted` les renvoie au PCO / administrateur seulement (`require_pco`).
 - Les photos d'un message supprimé répondent `410 message_deleted` au téléchargement, sauf pour un PCO / administrateur vérifié.
+
+## Réponse à un message (31 octobre 2026)
+Un message peut citer un autre message du même événement : champ facultatif `reply_to` (identifiant) dans la charge utile de création (`/sync`, objet `message`). Un identifiant inconnu ou d'un autre événement est ignoré (le message est livré sans citation). `GET /events/{id}/messages` et le flux de changements renvoient `reply_to`. Les applications affichent la citation à partir du message cité qu'elles ont déjà ; s'il a été supprimé, « Message supprimé ». Migration 0026 (colonne `messages.reply_to`, facultative). Notifications inchangées.

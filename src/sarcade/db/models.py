@@ -116,6 +116,8 @@ class MessageRow(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     deleted_by_pco: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    # Reply (31 Oct 2026): id of the quoted message, same event.
+    reply_to: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 class AckRow(Base):
     __tablename__ = "acks"
