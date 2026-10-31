@@ -118,6 +118,12 @@ def apply_patch(stored: dict | None, patch: dict) -> dict:
             if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
                 raise InvalidSettings(f"invalid_value:{key}")
         result[key] = value
+    # APRS belongs to the ADRASEC module (31 Oct 2026): not set without it,
+    # and the radio transmission stops when the module is turned off.
+    if "adrasec" not in result["modules"]:
+        if any(k.startswith("aprs_") and v not in (None, False, []) for k, v in patch.items()):
+            raise InvalidSettings("module_inactive:adrasec")
+        result["aprs_tx_rf"] = False
     if not (result["tracking_min_interval_s"] <= result["tracking_default_interval_s"]
             <= result["tracking_max_interval_s"]):
         raise InvalidSettings("inconsistent_tracking_bounds")

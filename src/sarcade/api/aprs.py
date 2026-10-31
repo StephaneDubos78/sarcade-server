@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from sarcade.aprs import callsigns as calls
 from sarcade.aprs.links import handle_line
+from sarcade import modules
 from sarcade.aprs.service import event_callsigns, runtime
 from sarcade.db.models import AprsGroupRow, AprsStationClassRow, EventRow
 from sarcade.realtime.manager import manager
@@ -141,6 +142,9 @@ def set_station_class(db: Session, event_id: str, device_id: str, payload: Stati
 async def put_station_class(event_id: str, device_id: str, payload: StationClassIn, db: Session = Depends(get_db)):
     if not device_id or len(device_id) > 64:
         raise HTTPException(status_code=422, detail="invalid_device_id")
+    event = _event(db, event_id)
+    if not modules.enabled(event.settings, "adrasec"):
+        raise HTTPException(status_code=409, detail="module_inactive:adrasec")
     data = set_station_class(db, event_id, device_id, payload)
     await manager.broadcast(event_id, {"type": "aprs.class.updated", "data": data})
     return data
