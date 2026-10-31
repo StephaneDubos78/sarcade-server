@@ -173,6 +173,13 @@ def validate_bearing(raw) -> dict:
         raise InvalidFeature("invalid_exercise")
     if exercise:
         out["exercise"] = True
+    # In the probable zone or not, decided by hand (card « Zone probable »,
+    # 31 Oct 2026): « in » kept, « out » set aside; absent: automatic.
+    if raw.get("zone") is not None:
+        if raw.get("zone") not in ("in", "out", "auto"):
+            raise InvalidFeature("invalid_zone")
+        if raw["zone"] != "auto":
+            out["zone"] = raw["zone"]
     if raw.get("frequency_mhz") is not None:
         out["frequency_mhz"] = _num(raw.get("frequency_mhz"), 1, 10_000, "invalid_frequency")
     return out

@@ -411,6 +411,7 @@ def tv_bearing(feature: dict) -> dict | None:
             "azimuth_deg": b["azimuth_deg"], "length_m": b.get("length_m") or 10_000,
             "cone_deg": b.get("cone_deg") if b.get("cone_deg") is not None else 5,
             "search": search, "label": feature.get("label") or "", "exercise": bool(b.get("exercise")),
+            "strength": b.get("strength") or 0, "zone": b.get("zone") or "auto",
             "color": search_color(search)}
 
 
@@ -465,23 +466,136 @@ def format_distance(m: float) -> str:
     return f"{m / 1000:.{2 if m < 10000 else 1}f} km".replace(".", ",")
 
 
+def round_distance(m: float) -> str:
+    """Rounded for a label (card « Zone probable », 31 Oct 2026): « ±700 m »
+    rather than « ±699 m », « 1,3 km », « 12 km »."""
+    if m < 1000:
+        return f"{round(m / 10) * 10:.0f} m"
+    if m < 10000:
+        return f"{m / 1000:.1f} km".replace(".", ",")
+    return f"{round(m / 1000)} km"
+
+
+# Robust probable zone (card « Zone probable : libellé trop gros et relevés
+# incohérents », validated 31 Oct 2026, 11 h 07). Same rule as
+# `probableZone` of the application (bearing_models.dart), keep in step.
+MIN_CROSSING_ANGLE_DEG = 20.0   # nearly parallel bearings cross badly
+MIN_TOLERANCE_M = 100.0
+MIN_RADIUS_M = 50.0
+ZONE_SHARE = 0.9                 # radius holding ~90 % of the weighted crossings
+
+
+def _weight(b: dict) -> float:
+    """Precision of a bearing: narrow cone and strong signal weigh more."""
+    cone = max(1.0, float(b.get("cone_deg") if b.get("cone_deg") is not None else 5))
+    return (1.0 + float(b.get("strength") or 0) / 9.0) / (cone * cone)
+
+
+def _angle(a: dict, b: dict) -> float:
+    d = abs(float(a["azimuth_deg"]) - float(b["azimuth_deg"])) % 180
+    return min(d, 180 - d)
+
+
+def _crossings(group: list[dict], used: set[int]) -> list[tuple[tuple[float, float], float]]:
+    out = []
+    ids = sorted(used)
+    for x in range(len(ids)):
+        for y in range(x + 1, len(ids)):
+            a, b = group[ids[x]], group[ids[y]]
+            ang = _angle(a, b)
+            if ang < MIN_CROSSING_ANGLE_DEG:
+                continue
+            c = crossing(a, b)
+            if c is not None:
+                out.append((c, _weight(a) * _weight(b) * math.sin(math.radians(ang))))
+    return out
+
+
+def _centre(pts: list[tuple[tuple[float, float], float]]) -> tuple[float, float]:
+    w = sum(p[1] for p in pts)
+    return sum(p[0][0] * p[1] for p in pts) / w, sum(p[0][1] * p[1] for p in pts) / w
+
+
+def _radius(centre: tuple[float, float], pts: list[tuple[tuple[float, float], float]]) -> float:
+    dist = sorted((distance_m(centre, p[0]), p[1]) for p in pts)
+    total, acc = sum(w for _, w in dist), 0.0
+    for d, w in dist:
+        acc += w
+        if acc >= ZONE_SHARE * total:
+            return max(MIN_RADIUS_M, d)
+    return max(MIN_RADIUS_M, dist[-1][0])
+
+
+def _miss(b: dict, centre: tuple[float, float]) -> tuple[float, float]:
+    """Distance from the bearing line to [centre] and distance along it."""
+    k = math.cos(math.radians(b["lat"]))
+    dx = (centre[1] - b["lon"]) * k * 111_320.0
+    dy = (centre[0] - b["lat"]) * 110_540.0
+    az = math.radians(float(b["azimuth_deg"]))
+    ux, uy = math.sin(az), math.cos(az)
+    along = dx * ux + dy * uy
+    if along <= 0:
+        return math.hypot(dx, dy), 0.0
+    return abs(dx * uy - dy * ux), along
+
+
+def robust_zone(group: list[dict]) -> dict:
+    """Zone of one search: bearings set aside by hand (« out ») are left
+    out; then, with 3 or more, each bearing is tested against the zone of
+    the others and the worst one beyond its error cone is set aside, again
+    until all agree. Bearings put back by hand (« in ») are always kept."""
+    used = {i for i, b in enumerate(group) if b.get("zone") != "out"}
+    auto: list[int] = []
+    while len(used) >= 3:
+        worst, worst_ratio = None, 1.0
+        for i in sorted(used):
+            if group[i].get("zone") == "in":
+                continue
+            others = _crossings(group, used - {i})
+            if not others:
+                continue
+            centre = _centre(others)
+            miss, along = _miss(group[i], centre)
+            cone = float(group[i].get("cone_deg") if group[i].get("cone_deg") is not None else 5)
+            tol = max(MIN_TOLERANCE_M, along * math.tan(math.radians(max(cone, 1.0)))) + 0.5 * _radius(centre, others)
+            if miss / tol > worst_ratio:
+                worst, worst_ratio = i, miss / tol
+        if worst is None:
+            break
+        used.discard(worst)
+        auto.append(worst)
+    pts = _crossings(group, used)
+    zone: dict = {"used": len(used), "crossings": [[round(p[0][0], 6), round(p[0][1], 6)] for p in pts],
+                  "excluded": [group[i].get("id") for i in sorted(set(range(len(group))) - used)],
+                  "auto_excluded": [group[i].get("id") for i in auto]}
+    if pts:
+        centre = _centre(pts)
+        zone.update(centre=centre, radius_m=_radius(centre, pts))
+    return zone
+
+
+def zone_label(radius_m: float, used: int, excluded: int) -> str:
+    """« ±700 m · 4 relevés », « · 1 écarté » when one was set aside."""
+    text = f"±{round_distance(radius_m)} · {used} relevé{'s' if used > 1 else ''}"
+    if excluded:
+        text += f" · {excluded} écarté{'s' if excluded > 1 else ''}"
+    return text
+
+
 def probable_zones(bearings: list[dict]) -> list[dict]:
-    """Crossings of each search and the probable zone around them: centre of
-    the crossings, radius to the farthest one (at least 50 m)."""
+    """Crossings of each search and its probable zone (robust_zone)."""
     groups: dict[str, list[dict]] = {}
     for b in bearings:
         groups.setdefault(b.get("search") or "", []).append(b)
     out = []
     for search, group in sorted(groups.items()):
-        pts = [c for i in range(len(group)) for j in range(i + 1, len(group))
-               if (c := crossing(group[i], group[j])) is not None]
+        z = robust_zone(group)
         zone = {"search": search, "color": search_color(search), "exercise": any(b.get("exercise") for b in group),
-                "bearings": len(group), "crossings": [[round(p[0], 6), round(p[1], 6)] for p in pts]}
-        if pts:
-            centre = (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
-            radius = max(50.0, max(distance_m(centre, p) for p in pts))
-            zone.update(lat=round(centre[0], 6), lon=round(centre[1], 6), radius_m=round(radius, 1),
-                        label=f"±{format_distance(radius)} · {len(group)} relevés")
+                "bearings": z["used"], "crossings": z["crossings"], "excluded": z["excluded"]}
+        if "centre" in z:
+            (lat, lon), radius = z["centre"], z["radius_m"]
+            zone.update(lat=round(lat, 6), lon=round(lon, 6), radius_m=round(radius, 1),
+                        label=zone_label(radius, z["used"], len(z["excluded"])))
         out.append(zone)
     return out
 
