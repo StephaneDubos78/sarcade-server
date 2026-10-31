@@ -72,4 +72,10 @@ check(any("Modules de l'événement : ADRASEC" in (e.get("summary") or "") for e
 
 hb = c.post(f"{API}/events/{fam}/devices/TEL-09/heartbeat", json={"label": "TEL-09", "platform": "android"}).json()
 check(hb["settings"]["modules"] == ["adrasec"], "modules sent to the applications in the heartbeat")
+off = event("family")
+r = c.patch(f"{API}/events/{off}/settings", json={"actor_id": "PCO", "settings": {"aprs_callsigns": ["F4ABC"]}})
+check(r.status_code == 422 and "module_inactive" in r.text, "APRS settings refused without ADRASEC")
+check(c.get(f"{API}/events/{off}/aprs/callsigns").json()["callsigns"] == [], "no APRS station followed without ADRASEC")
+r = c.put(f"{API}/events/{off}/aprs/classes/aprs:F4ABC", json={"actor_id": "PCO", "kind": "fixed"})
+check(r.status_code == 409, "APRS station class refused without ADRASEC")
 print("modules per event: all checks passed")

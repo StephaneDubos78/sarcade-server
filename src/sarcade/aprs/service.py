@@ -63,8 +63,11 @@ def packet_key(line: str) -> str:
 
 
 def event_callsigns(db: Session, event: EventRow) -> list[str]:
-    """Callsigns followed by an event: its groups plus the PCO additions."""
+    """Callsigns followed by an event: its groups plus the PCO additions;
+    none without the ADRASEC module (31 Oct 2026)."""
     s = event_settings.merged(event.settings)
+    if "adrasec" not in s["modules"]:
+        return []
     entries = list(s["aprs_callsigns"])
     if s["aprs_groups"]:
         for group in db.scalars(select(AprsGroupRow).where(AprsGroupRow.id.in_(s["aprs_groups"]))):
@@ -178,7 +181,7 @@ def queue_transmission(event_settings_data: dict, device: DeviceRow | None, lat:
     s = event_settings.merged(event_settings_data)
     # Callsign chosen by the PCO of the event; the server one as fallback.
     call = s["aprs_tx_callsign"] or server_callsign()
-    if (not s["aprs_tx_rf"] or device is None or not device.aprs_tx_consent or not device.callsign
+    if (not s["aprs_tx_rf"] or "adrasec" not in s["modules"] or device is None or not device.aprs_tx_consent or not device.callsign
             or not call or runtime.tx_queue is None or not runtime.radio.connected):
         return False
     last = runtime.last_tx.get(device.callsign)

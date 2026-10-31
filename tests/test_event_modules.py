@@ -36,3 +36,20 @@ def test_enabled_reads_stored_settings():
     assert not modules.enabled({"modules": []}, "adrasec")
     assert modules.enabled({"modules": ["adrasec"]}, "adrasec")
     assert not modules.enabled({"modules": ["adrasec"]}, "race")
+
+
+def test_aprs_settings_need_adrasec():
+    with pytest.raises(s.InvalidSettings, match="module_inactive"):
+        s.apply_patch({"modules": []}, {"aprs_groups": ["g1"]})
+    # Turning the module off stops the local radio transmission.
+    assert s.apply_patch({"aprs_tx_rf": True}, {"modules": []})["aprs_tx_rf"] is False
+    # Clearing APRS settings stays possible without the module.
+    assert s.apply_patch({"modules": []}, {"aprs_groups": []})["aprs_groups"] == []
+
+
+def test_no_followed_callsigns_without_adrasec():
+    from sarcade.aprs.service import event_callsigns
+
+    class Ev:
+        settings = {"modules": [], "aprs_callsigns": ["F4ABC"]}
+    assert event_callsigns(None, Ev()) == []
