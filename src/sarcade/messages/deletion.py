@@ -39,6 +39,8 @@ def public_dict(row: MessageRow) -> dict:
     out = {"id": row.id, "event_id": row.event_id, "sender_id": row.sender_id,
            "recipient_ids": row.recipient_ids, "priority": row.priority, "body": row.body,
            "attachments": row.attachments or [], "created_at": row.created_at}
+    if row.reply_to:
+        out["reply_to"] = row.reply_to
     if row.deleted_at is not None:
         out.update(body="", attachments=[], deleted=True, deleted_at=row.deleted_at,
                    deleted_by=row.deleted_by, deleted_by_pco=bool(row.deleted_by_pco))
@@ -50,7 +52,7 @@ def pco_dict(row: MessageRow) -> dict:
     return {"id": row.id, "event_id": row.event_id, "sender_id": row.sender_id,
             "recipient_ids": row.recipient_ids, "priority": row.priority, "body": row.body,
             "attachments": row.attachments or [], "created_at": row.created_at,
-            "deleted_at": row.deleted_at, "deleted_by": row.deleted_by,
+            "reply_to": row.reply_to, "deleted_at": row.deleted_at, "deleted_by": row.deleted_by,
             "deleted_by_pco": bool(row.deleted_by_pco)}
 
 

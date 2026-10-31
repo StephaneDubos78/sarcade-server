@@ -27,6 +27,7 @@ from sarcade.features import service as features
 from sarcade.messages import attachments as msg_attachments
 from sarcade.pois import service as pois
 from sarcade.messages import deletion as msg_deletion
+from sarcade.messages import reply as msg_reply
 
 from .deps import get_db
 from . import operations as event_ops
@@ -640,6 +641,7 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
             op.payload["attachments"] = msg_attachments.clean_attachments(op.payload.get("attachments"))
         except ValueError:
             raise SyncRejected("pièces jointes invalides")
+        op.payload["reply_to"] = msg_reply.clean_reply_to(db, op.event_id, op.payload.get("reply_to"))
         if not groups_api.message_allowed(db, op.event_id, op.payload.get("sender_id", ""),
                                           op.payload.get("recipient_ids")):
             raise SyncRejected("envoi non autorisé dans ce groupe (écoute seule)", journal=dict(
@@ -690,7 +692,7 @@ def _apply_operation(db: Session, op: SyncOperationIn, now: datetime,
         row = MessageRow(id=op.object_id, event_id=op.event_id, sender_id=p["sender_id"],
             recipient_ids=p.get("recipient_ids", []), priority=p.get("priority", "routine"),
             body=p["body"], attachments=p["attachments"] or None,
-            created_at=_iso(p["created_at"]))
+            created_at=_iso(p["created_at"]), reply_to=p.get("reply_to"))
         db.add(row); db.flush()
         db.add(LogbookRow(event_id=op.event_id, kind="message", object_id=row.id,
             actor_id=row.sender_id, summary=msg_attachments.logbook_summary(row.body, p["attachments"]),
