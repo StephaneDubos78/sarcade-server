@@ -30,3 +30,12 @@ def test_invalid_bearings(bearing, error):
 
 def test_logbook_name():
     assert "Relevé" in features.logbook_summary("bearing", "", "create")
+
+
+def test_zone_decided_by_hand():
+    out = features.validate_upsert({**BASE, "bearing": {"azimuth_deg": 17, "zone": "out"}}, event_id="e", object_id="b1")
+    assert out["bearing"]["zone"] == "out"
+    auto = features.validate_upsert({**BASE, "bearing": {"azimuth_deg": 17, "zone": "auto"}}, event_id="e", object_id="b1")
+    assert "zone" not in auto["bearing"]
+    with pytest.raises(features.InvalidFeature, match="invalid_zone"):
+        features.validate_upsert({**BASE, "bearing": {"azimuth_deg": 17, "zone": "maybe"}}, event_id="e", object_id="b1")

@@ -543,3 +543,50 @@ def test_screens_mine_and_live_view(sos_client, monkeypatch):
     c.put(url, json={"view": None})
     c.put(url, json={"view": VIEW, "live": True})
     assert count() == 2
+
+
+# --- Robust probable zone (card « Zone probable », 31 Oct 2026) ----------
+
+def _towards(lat, lon, target, **kw):
+    """Bearing from (lat, lon) towards target (lat, lon)."""
+    dy = (target[0] - lat) * 110_540.0
+    dx = (target[1] - lon) * 111_320.0 * tv.math.cos(tv.math.radians(lat))
+    return _b(lat, lon, (tv.math.degrees(tv.math.atan2(dx, dy)) + 360) % 360, id=f"b{lat}{lon}", **kw)
+
+
+TARGET = (48.80, 2.10)
+GOOD = [_towards(48.75, 2.10, TARGET), _towards(48.80, 2.03, TARGET), _towards(48.75, 2.04, TARGET),
+        _towards(48.85, 2.16, TARGET)]
+
+
+def test_wrong_bearing_is_set_aside():
+    wild = _towards(48.78, 2.20, (48.70, 2.05))  # crosses the others far from the target
+    [z] = tv.probable_zones([*GOOD, wild])
+    assert z["excluded"] == [wild["id"]] and z["bearings"] == 4
+    assert abs(z["lat"] - 48.80) < 0.003 and abs(z["lon"] - 2.10) < 0.004
+    assert z["radius_m"] < 400
+    assert z["label"].endswith("· 4 relevés · 1 écarté")
+
+
+def test_without_the_wrong_one_the_zone_is_the_same():
+    [clean] = tv.probable_zones(GOOD)
+    assert clean["excluded"] == [] and clean["label"].startswith("±") and clean["label"].endswith("· 4 relevés")
+
+
+def test_set_aside_or_kept_by_hand():
+    wild = _towards(48.78, 2.20, (48.70, 2.05), zone="in")
+    [z] = tv.probable_zones([*GOOD, wild])
+    assert z["excluded"] == [] and z["bearings"] == 5
+    out = {**GOOD[0], "zone": "out"}
+    [z] = tv.probable_zones([out, *GOOD[1:]])
+    assert z["excluded"] == [out["id"]] and z["bearings"] == 3
+
+
+def test_nearly_parallel_bearings_do_not_cross():
+    [z] = tv.probable_zones([_b(48.7, 2.1, 10), _b(48.7, 2.12, 355)])
+    assert z["crossings"] == [] and "lat" not in z
+
+
+def test_rounded_labels():
+    assert tv.round_distance(699) == "700 m" and tv.round_distance(1260) == "1,3 km" and tv.round_distance(12400) == "12 km"
+    assert tv.zone_label(699, 1, 0) == "±700 m · 1 relevé"
