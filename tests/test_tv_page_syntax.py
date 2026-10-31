@@ -4,6 +4,7 @@ whole page script because of one nullish operator, leaving « ······ » an
 QR code. Syntax of 2017 only (esprima parses ES2017), and no feature of the
 later years esprima would let through."""
 import re
+from html.parser import HTMLParser
 
 import esprima
 import pytest
@@ -21,8 +22,32 @@ FORBIDDEN = {
 }
 
 
+class _Scripts(HTMLParser):
+    """Inline scripts of a page (those without src)."""
+
+    def __init__(self):
+        super().__init__()
+        self.scripts: list[str] = []
+        self._in = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "script" and not dict(attrs).get("src"):
+            self._in = True
+            self.scripts.append("")
+
+    def handle_endtag(self, tag):
+        if tag == "script":
+            self._in = False
+
+    def handle_data(self, data):
+        if self._in:
+            self.scripts[-1] += data
+
+
 def inline_scripts(page: str) -> list[str]:
-    return re.findall(r"<script>(.*?)</script>", page, flags=re.S)
+    parser = _Scripts()
+    parser.feed(page)
+    return [js for js in parser.scripts if js.strip()]
 
 
 @pytest.mark.parametrize("name", ["_TV", "_APPROVE"])
