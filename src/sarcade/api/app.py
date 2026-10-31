@@ -40,6 +40,7 @@ from . import basemaps as basemaps_api
 from . import admin as admin_api
 from sarcade.security import journal as security_journal, siem, watch as security_watch
 from sarcade import licensing
+from sarcade import modules
 from sarcade.updates import service as updates_service
 from sarcade.weather import service as weather_service
 from sarcade.aprs import links as aprs_links
@@ -143,15 +144,29 @@ def health():
 @app.post("/api/v0.1/events", response_model=EventOut, status_code=201)
 def create_event(payload: EventCreate, db: Session = Depends(get_db), _pco=Depends(roles_api.require_pco)):
     now = datetime.now(UTC)
+    # Modules of the event: asked, or those of its event model (31 Oct 2026).
+    try:
+        mods = modules.clean(payload.modules) if payload.modules is not None else modules.for_kind(payload.kind)
+    except modules.InvalidModules as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     row = EventRow(id=str(uuid.uuid4()), name=payload.name, kind=payload.kind, summary=payload.summary,
-                   status="draft", created_at=now, version=0)
+                   status="draft", created_at=now, version=0, settings={"modules": mods})
     db.add(row); db.flush()
-    # ADRASEC default groups, created when the event opens (10 Oct 2026).
+    # Base channels (« Tous », « Diffusion PCO »), created when the event opens.
     groups_api.ensure_groups(db, row.id, groups.default_groups(row.id, now), now)
     db.add(LogbookRow(event_id=row.id, kind="group", object_id=None, actor_id="PCO", time=now,
-                      summary="Groupes par défaut ADRASEC créés"))
+                      summary="Canaux de base créés (« Tous », « Diffusion PCO »)"))
+    names = ", ".join(modules.MODULES[m]["label"] for m in mods) or "aucun (Core seul)"
+    db.add(LogbookRow(event_id=row.id, kind="settings", object_id=row.id, actor_id="PCO", time=now,
+                      summary=f"Modules de l'événement : {names}"))
     db.commit(); db.refresh(row)
     return row
+
+
+@app.get("/api/v0.1/modules")
+def list_modules():
+    """Modules that can be enabled per event and the event models."""
+    return {"modules": modules.catalogue(), "templates": modules.TEMPLATES}
 
 
 @app.post("/api/v0.1/events/{event_id}/teams", response_model=TeamOut, status_code=201)
@@ -486,7 +501,13 @@ def _apply_map_feature(db: Session, op, now: datetime) -> tuple[str, int, dict |
             change = features.validate_upsert(op.payload, event_id=op.event_id, object_id=op.object_id)
     except features.InvalidFeature:
         return "rejected", 0, None
-    if db.get(EventRow, op.event_id) is None:
+    event = db.get(EventRow, op.event_id)
+    if event is None:
+        return "rejected", 0, None
+    # Bearings belong to the ADRASEC module: refused in an event without it
+    # (31 Oct 2026); deleting an older one stays possible.
+    if op.action != "delete" and (op.payload or {}).get("kind") == "bearing" \
+            and not modules.enabled(event.settings, "adrasec"):
         return "rejected", 0, None
     change["updated_at"] = features.clamp_time(change["updated_at"], now)
 
